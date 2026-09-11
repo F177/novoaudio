@@ -24,7 +24,7 @@ Fundador solo. Prioridade absoluta: **simplicidade operacional e custo baixo em 
 
 6. **`org_id` em toda tabela de domínio**, desde o primeiro dia. Toda query filtra por ele. Não construa gestão de times ainda, mas não pinte o multi-tenant num canto.
 
-7. **Nada de GPU ociosa.** Todo trabalho de GPU roda em Modal (serverless, cobrança por segundo). Não introduza serviços que exijam GPU ligada esperando requisição.
+7. **Nada de GPU ociosa.** Todo trabalho de GPU roda em RunPod Serverless (cobrança por segundo, escala a zero). Não introduza serviços que exijam GPU ligada esperando requisição.
 
 ## Stack (travada — não substitua sem me perguntar)
 
@@ -34,7 +34,7 @@ Fundador solo. Prioridade absoluta: **simplicidade operacional e custo baixo em 
 | API | FastAPI (Python 3.12), em Railway |
 | Banco / Auth | Supabase (Postgres + Auth) |
 | Storage de mídia | Cloudflare R2 (S3-compatible, egresso grátis) |
-| GPU / workers de ML | Modal (serverless) |
+| GPU / workers de ML | RunPod Serverless (containers Docker, um endpoint por função) |
 | Fila | Postgres, `SELECT ... FOR UPDATE SKIP LOCKED` |
 | Pagamento | Asaas (PIX e boleto) |
 | Erros | Sentry |
@@ -45,13 +45,13 @@ Fundador solo. Prioridade absoluta: **simplicidade operacional e custo baixo em 
 
 | Etapa | Modelo | Onde roda |
 |---|---|---|
-| Separação voz/fundo | Demucs (htdemucs) | Modal |
-| ASR + timestamps por palavra | WhisperX (large-v3) | Modal |
-| Diarização | pyannote (via WhisperX) | Modal |
+| Separação voz/fundo | Demucs (htdemucs) | RunPod |
+| ASR + timestamps por palavra | WhisperX (large-v3) | RunPod |
+| Diarização | pyannote (via WhisperX) | RunPod |
 | Tradução | LLM via API (Claude) | API, não GPU |
-| TTS | MOSS-TTS-Local-Transformer-v1.5 (Apache-2.0) | Modal |
-| Avaliação (CER) | Whisper large-v3 | Modal |
-| Similaridade de locutor | WavLM-TDNN / ECAPA | Modal |
+| TTS | MOSS-TTS-v1.5 (OpenMOSS-Team, 8B, Apache-2.0) | RunPod |
+| Avaliação (CER) | Whisper large-v3 | RunPod |
+| Similaridade de locutor | WavLM-TDNN / ECAPA | RunPod |
 
 **Detalhes do MOSS-TTS que importam para o código:**
 - Controle de duração: parâmetro `tokens` em `processor.build_user_message(text=..., tokens=N)`.
@@ -78,8 +78,11 @@ Fundador solo. Prioridade absoluta: **simplicidade operacional e custo baixo em 
     normalize.py      Números, moeda, datas, siglas, ordinais
     syllables.py      Contador de sílabas
     g2p.py            Fonemização e dicionário IPA
-/modal
-  functions.py      Entrypoints de GPU (demucs, whisperx, tts, eval)
+/runpod             Entrypoints de GPU — um subdiretório por endpoint serverless
+  /separate_stems   Dockerfile + handler.py (Demucs)
+  /transcribe       Dockerfile + handler.py (WhisperX + pyannote)
+  /synthesize       Dockerfile + handler.py (MOSS-TTS)
+  /evaluate         Dockerfile + handler.py (Whisper large-v3, CER)
 /migrations         SQL versionado
 /evals              Harness de avaliação pt-BR
 /scripts            CLI de desenvolvimento

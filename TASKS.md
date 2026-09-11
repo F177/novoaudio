@@ -27,9 +27,9 @@ Estrutura de pastas conforme `CLAUDE.md`, `pyproject.toml` com ruff e pytest, `M
 `packages/ptbr/normalize.py`. Expande números cardinais e ordinais, moeda (R$, US$), datas, horas, porcentagem, siglas (com tabela de exceções para as que viram palavra: OTAN, IBGE soletrado), abreviações (Dr., Sr.ª, av.), unidades. Escala curta (bilhão = 10⁹).
 **Aceite:** ≥80 casos de teste. `R$ 1.234,56` → `mil duzentos e trinta e quatro reais e cinquenta e seis centavos`. `10/09/2026` → `dez de setembro de dois mil e vinte e seis`.
 
-### T0.4 — Wrappers de GPU no Modal 🤝
-`modal/functions.py`. Quatro funções serverless: `separate_stems` (Demucs), `transcribe` (WhisperX com timestamps por palavra + diarização), `synthesize` (MOSS-TTS), `evaluate` (Whisper para CER). Cada uma recebe e devolve caminhos em R2. Container com modelo pré-baixado na imagem.
-**Aceite:** cada função roda num arquivo de teste e devolve saída válida. Cold start medido e anotado no README.
+### T0.4 — Wrappers de GPU no RunPod 🤝
+`runpod/` (um subdiretório por endpoint, com `Dockerfile` + `handler.py`). Quatro workers serverless: `separate_stems` (Demucs), `transcribe` (WhisperX com timestamps por palavra + diarização), `synthesize` (MOSS-TTS), `evaluate` (Whisper para CER). Cada um recebe e devolve caminhos em R2. Imagem com modelo pré-baixado.
+**Aceite:** cada worker roda num arquivo de teste e devolve saída válida. Cold start medido e anotado no README.
 
 ### T0.5 — Segmentação prosódica 🤖
 `packages/pipeline/segmentation.py`. Recebe a saída do WhisperX (palavras com timestamps + locutor), devolve segmentos. Classifica gaps: <120ms ignora, 120–350ms pausa fraca, >350ms âncora dura. Quebra também em troca de locutor e em duração >12s. Emite `[t_inicio, t_fim, texto, speaker, pausas_internas]`.

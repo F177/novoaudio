@@ -48,12 +48,16 @@ bastante disco. Isso é esperado.
 
 No console do RunPod, criar 4 endpoints serverless, um por imagem:
 
-| Endpoint | Imagem | GPU mínima sugerida |
-|---|---|---|
-| `separate_stems` | `novoaudio-separate-stems` | qualquer (Demucs é leve) |
-| `transcribe` | `novoaudio-transcribe` | ≥24 GB VRAM |
-| `synthesize` | `novoaudio-synthesize` | ≥24 GB VRAM (8B params em bf16, ~16 GB só de pesos) |
-| `evaluate` | `novoaudio-evaluate` | qualquer |
+| Endpoint | Imagem | GPU sugerida | Por quê |
+|---|---|---|---|
+| `separate_stems` | `novoaudio-separate-stems` | 16 GB (ex. RTX 4000 Ada / A4000) — o mais barato | Demucs/htdemucs é pequeno (~150MB) |
+| `transcribe` | `novoaudio-transcribe` | 24 GB (RTX 3090/4090, A5000) | large-v3 + alinhamento + diarização carregados juntos |
+| `synthesize` | `novoaudio-synthesize` | 48 GB (A6000, L40, RTX 6000 Ada) | 8B parâmetros em bf16 (~16 GB só de pesos); sem FlashAttention 2, o cache de atenção na geração consome mais — 24 GB é arriscado de estourar |
+| `evaluate` | `novoaudio-evaluate` | 16 GB | Whisper large-v3 sozinho em float16 cabe folgado |
+
+Estimativa por tamanho de modelo, não medida — se topar rodar `synthesize`
+em 24 GB pra economizar e não estourar OOM, fique à vontade; só espere que
+possa quebrar.
 
 Em cada endpoint, configurar como variáveis de ambiente: `R2_ACCOUNT_ID`,
 `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (todos) e `HF_TOKEN`

@@ -6,8 +6,12 @@ Precisa rodar numa máquina com GPU e o MOSS-TTS instalado (ver
 `runpod/synthesize/base.Dockerfile` pro setup exato). Não faz parte das
 dependências do repo.
 
+Salva o áudio de CADA frase (não só mede a duração) — é isso que permite
+ouvir depois pra decidir os coeficientes, que é o ponto do T0.6.
+
 Uso:
-    python scripts/calibration_measure_durations.py entrada.json saida.csv
+    python scripts/calibration_measure_durations.py entrada.json saida.csv \
+        --audio-dir calibration_audio/
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import time
 
 
@@ -22,9 +27,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", help="JSON com as frases (ver calibration_templates.py)")
     parser.add_argument("output_csv", help="Caminho do CSV de resultados")
+    parser.add_argument(
+        "--audio-dir", required=True, help="Diretório onde salvar um .wav por frase"
+    )
     args = parser.parse_args()
+    os.makedirs(args.audio_dir, exist_ok=True)
 
     import torch
+    import torchaudio
     from transformers import AutoModel, AutoProcessor
 
     torch.backends.cuda.enable_cudnn_sdp(False)
@@ -61,10 +71,15 @@ def main() -> None:
             )
 
             actual_duration = None
+            sil, n_pause = item["measured_syllables"], item["num_pauses"]
+            audio_filename = f"{i:03d}_{sil}sil_{n_pause}pause.wav"
             for decoded in processor.decode(outputs):
                 audio = decoded.audio_codes_list[0]
                 sr = processor.model_config.sampling_rate
                 actual_duration = audio.shape[-1] / sr
+                torchaudio.save(
+                    os.path.join(args.audio_dir, audio_filename), audio.unsqueeze(0), sr
+                )
                 break
 
             elapsed = time.monotonic() - t0
@@ -73,6 +88,7 @@ def main() -> None:
                     **item,
                     "actual_duration_seconds": actual_duration,
                     "gen_time_seconds": round(elapsed, 2),
+                    "audio_file": audio_filename,
                 }
             )
             print(
@@ -82,7 +98,14 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001 - coleta de dados, um erro não deve parar o lote
             errors += 1
             print(f"[{i + 1}/{len(phrases)}] ERRO: {e}")
-            results.append({**item, "actual_duration_seconds": None, "gen_time_seconds": None})
+            results.append(
+                {
+                    **item,
+                    "actual_duration_seconds": None,
+                    "gen_time_seconds": None,
+                    "audio_file": None,
+                }
+            )
 
         if (i + 1) % 20 == 0:
             _write_csv(args.output_csv, results)

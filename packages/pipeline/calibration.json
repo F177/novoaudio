@@ -1,0 +1,32 @@
+{
+  "formula": "duracao_segundos = a + b * silabas + c * segundos_de_pausa_pedidos",
+  "coefficients": {
+    "a": 0.0665,
+    "b": 0.1784,
+    "c": 5.6865
+  },
+  "r_squared": 0.8082,
+  "n_samples": 321,
+  "n_excluded": 5,
+  "calibrated_at": "2026-09-12",
+  "calibrated_by": "Felipe",
+  "dataset": {
+    "total_phrases": 326,
+    "sources": { "template": 210, "qwen_llm": 116 },
+    "registers": ["noticia", "vlog", "tutorial", "gameplay", "review", "comedia"],
+    "note": "Frases cobrindo 6 registros de fala (não só telejornal) depois de identificar que a primeira rodada só tinha notícia, o que não representa o conteúdo real do YouTube."
+  },
+  "excluded_rows": {
+    "count": 5,
+    "reasons": [
+      "2 frases do registro 'gameplay' geradas pelo Qwen saíram em chinês em vez de português (vazamento de idioma do LLM gerador) — o contador de sílabas pt-BR corretamente reportou 0-1 sílabas nelas.",
+      "3 gerações do MOSS-TTS com duração absurda (49-147s para 48-61 sílabas de texto normal em português, ~8-15x o esperado) — provável falha de geração (o modelo parece ter travado repetindo), não sinal real sobre ritmo de fala."
+    ]
+  },
+  "known_issues": {
+    "r_squared_below_target": "O critério de aceite do T0.6 pede R²>=0.93; ficamos em 0.81. Testei incluir o registro (noticia/vlog/tutorial/...) como variável categórica e o R² não mudou (0.8082 -> 0.8108) — ou seja, registro não é a causa principal da variância residual. Suspeita mais provável: o método de gerar frases-template concatenando cláusulas curtas desconexas (ex. 'Primeiro, você precisa abrir o programa. Confira se está tudo certo.') produz um jeito artificial de falar que o MOSS-TTS pausa/pacia de forma inconsistente, diferente de uma frase contínua real de vídeo. Decisão: aceitar 0.81 por ora e documentar, em vez de investir mais tempo re-desenhando o gerador de frases (ver scripts/calibration_templates.py) — revisitar se o T0.7/T0.8 mostrarem que o orçamento de sílabas está sistematicamente errado na prática.",
+    "short_segments_below_5_syllables": "Sem dado limpo: as únicas 2 amostras <5 sílabas no lote eram justamente as duas frases em chinês (excluídas). Não temos ainda evidência real sobre o comportamento do modelo em segmentos muito curtos — precisa de uma coleta dedicada depois.",
+    "background_noise_during_pauses": "Ouvindo os áudios (167_56sil_0pause.wav), o MOSS-TTS não gera silêncio digital puro nas pausas entre frases — gera um chão de ruído de ~-45 a -47 dBFS contra picos de fala de ~-21 dBFS (confirmado via análise de RMS). Não há parâmetro documentado no modelo pra controlar isso. Mitigação proposta: aplicar noise gate nos trechos que sabemos serem pausa (já que os marcamos com `[pause X.Ys]`) na montagem (T0.10) ou pós-processamento da síntese (T0.9).",
+    "flat_delivery_on_concatenated_clauses": "Ouvindo 172_56sil_0pause.wav (template, 4 cláusulas desconexas coladas) vs. 212_19sil_0pause.wav (Qwen, uma frase natural única com '!'), o segundo soou nitidamente mais natural/emotivo. Hipóteses: (1) pontuação como '!' é uma alavanca implícita de emoção que o modelo usa, já que não há parâmetro de tom explícito; (2) gerações mais longas (56 sílabas em 4 sentenças) parecem 'achatar' a expressividade ao longo do clipe, diferente de uma frase curta única. Segmentos reais do produto vêm de fala contínua (T0.5), não de cláusulas coladas artificialmente — esse problema específico deve ser mais brando em produção do que nos dados de calibração, mas vale preservar pontuação expressiva do original na tradução (T0.8)."
+  }
+}

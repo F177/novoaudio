@@ -22,6 +22,12 @@ Config lida de variáveis de ambiente (ver `.env.example`):
     e incompatível com o resto). Sem essas variáveis, cai no caminho
     default anotado abaixo — mas se o Pod for recriado do zero, os
     venvs provavelmente vão morar em outro lugar, então ajuste o `.env`.
+
+    POD_LD_LIBRARY_PATH_ASR (opcional): faster-whisper (CTranslate2) não
+    acha `libcudnn_ops_infer.so.8` sozinho mesmo com `nvidia-cudnn-cu12`
+    instalado no venv — a lib existe em site-packages, só não está no
+    linker path por padrão. Confirmado rodando de verdade (`evaluate`
+    falhava com esse erro exato até setar isso).
 """
 
 from __future__ import annotations
@@ -32,6 +38,10 @@ from dataclasses import dataclass
 
 _DEFAULT_PYTHON_ASR = "/root/venvs/asr/bin/python"
 _DEFAULT_PYTHON_TTS = "/root/venvs/tts/bin/python"
+_DEFAULT_LD_LIBRARY_PATH_ASR = (
+    "/root/venvs/asr/lib/python3.11/site-packages/nvidia/cudnn/lib:"
+    "/root/venvs/asr/lib/python3.11/site-packages/nvidia/cublas/lib"
+)
 
 
 @dataclass
@@ -43,6 +53,7 @@ class PodConfig:
     workspace: str
     python_asr: str
     python_tts: str
+    ld_library_path_asr: str
 
     @classmethod
     def from_env(cls) -> PodConfig:
@@ -63,6 +74,9 @@ class PodConfig:
             workspace=os.environ["POD_WORKSPACE"],
             python_asr=os.environ.get("POD_PYTHON_ASR", _DEFAULT_PYTHON_ASR),
             python_tts=os.environ.get("POD_PYTHON_TTS", _DEFAULT_PYTHON_TTS),
+            ld_library_path_asr=os.environ.get(
+                "POD_LD_LIBRARY_PATH_ASR", _DEFAULT_LD_LIBRARY_PATH_ASR
+            ),
         )
 
 

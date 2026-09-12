@@ -313,7 +313,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
             pod,
             f"{pod.python_asr} -m scripts.pod_worker evaluate "
             f"--input {remote_job_dir}/eval_jobs.json --output {remote_job_dir}/eval.json",
-            env=hf_env,
+            env={**hf_env, "LD_LIBRARY_PATH": pod.ld_library_path_asr},
         )
         download_from_pod(pod, f"{remote_job_dir}/eval.json", str(eval_path))
 

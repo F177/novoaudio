@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -156,6 +157,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
     pod = PodConfig.from_env()
     remote_job_dir = f"jobs/{cache_dir.name}"
     run_on_pod(pod, f"mkdir -p {remote_job_dir}")
+    hf_env = {"HF_HOME": "/workspace/hf_cache", "HF_TOKEN": os.environ.get("HF_TOKEN", "")}
 
     def cached(name: str) -> Path:
         return cache_dir / name
@@ -175,7 +177,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         upload_to_pod(pod, str(audio_path), f"{remote_job_dir}/audio.wav")
         run_on_pod(
             pod,
-            f"python scripts/pod_worker.py separate_stems "
+            f"{pod.python_asr} -m scripts.pod_worker separate_stems "
             f"--input {remote_job_dir}/audio.wav --out-dir {remote_job_dir}/stems",
         )
         download_from_pod(pod, f"{remote_job_dir}/stems/background.wav", str(background_path))
@@ -189,8 +191,9 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
     if needs(transcript_path):
         run_on_pod(
             pod,
-            f"python scripts/pod_worker.py transcribe "
+            f"{pod.python_asr} -m scripts.pod_worker transcribe "
             f"--input {vocals_remote} --output {remote_job_dir}/transcript.json",
+            env=hf_env,
         )
         download_from_pod(pod, f"{remote_job_dir}/transcript.json", str(transcript_path))
 
@@ -249,9 +252,10 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         )
         run_on_pod(
             pod,
-            f"python scripts/pod_worker.py translate "
+            f"{pod.python_asr} -m scripts.pod_worker translate "
             f"--input {remote_job_dir}/translate_jobs.json "
             f"--output {remote_job_dir}/translations.json",
+            env=hf_env,
         )
         download_from_pod(pod, f"{remote_job_dir}/translations.json", str(translations_path))
 
@@ -285,8 +289,9 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         upload_to_pod(pod, str(cache_dir / "synth_jobs.json"), f"{remote_job_dir}/synth_jobs.json")
         run_on_pod(
             pod,
-            f"python scripts/pod_worker.py synthesize "
+            f"{pod.python_tts} -m scripts.pod_worker synthesize "
             f"--input {remote_job_dir}/synth_jobs.json --out-dir {remote_job_dir}/synth",
+            env=hf_env,
         )
         download_from_pod(pod, f"{remote_job_dir}/synth", str(synth_dir))
 
@@ -305,8 +310,9 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         upload_to_pod(pod, str(cache_dir / "eval_jobs.json"), f"{remote_job_dir}/eval_jobs.json")
         run_on_pod(
             pod,
-            f"python scripts/pod_worker.py evaluate "
+            f"{pod.python_asr} -m scripts.pod_worker evaluate "
             f"--input {remote_job_dir}/eval_jobs.json --output {remote_job_dir}/eval.json",
+            env=hf_env,
         )
         download_from_pod(pod, f"{remote_job_dir}/eval.json", str(eval_path))
 

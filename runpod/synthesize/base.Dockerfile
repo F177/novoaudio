@@ -1,3 +1,6 @@
+# Build context é a RAIZ DO REPO (não runpod/synthesize/), porque este
+# worker importa código puro de packages/pipeline:
+#   docker buildx build -f runpod/synthesize/base.Dockerfile .
 FROM python:3.12-slim
 
 WORKDIR /
@@ -14,6 +17,11 @@ RUN git clone --depth 1 https://github.com/OpenMOSS/MOSS-TTS.git /moss-tts
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu128 \
     -e "/moss-tts[torch-runtime]"
 RUN pip install --no-cache-dir runpod boto3
+
+COPY packages/__init__.py /packages/__init__.py
+COPY packages/pipeline/__init__.py /packages/pipeline/__init__.py
+COPY packages/pipeline/segmentation.py /packages/pipeline/segmentation.py
+COPY packages/pipeline/synthesis.py /packages/pipeline/synthesis.py
 
 # FlashAttention 2 fica de fora por padrão: exige compilar do zero contra uma
 # GPU com compute capability >=8 (Ampere+) e deixa o build frágil/lento. Para

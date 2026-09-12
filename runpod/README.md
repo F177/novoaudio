@@ -35,13 +35,14 @@ docker buildx build --platform linux/amd64 \
   -t <seu-usuario>/novoaudio-transcribe-base:latest \
   runpod/transcribe --push
 
+# synthesize e translate importam código de packages/pipeline (e translate
+# também de packages/ptbr), então o contexto de build dos dois é a RAIZ do
+# repo, não a pasta do worker:
 docker buildx build --platform linux/amd64 \
   -f runpod/synthesize/base.Dockerfile \
   -t <seu-usuario>/novoaudio-synthesize-base:latest \
-  runpod/synthesize --push
+  . --push
 
-# translate importa packages/pipeline e packages/ptbr do repo, então o
-# contexto de build é a RAIZ do repo, não runpod/translate/:
 docker buildx build --platform linux/amd64 \
   -f runpod/translate/base.Dockerfile \
   -t <seu-usuario>/novoaudio-translate-base:latest \
@@ -62,8 +63,9 @@ docker buildx build --platform linux/amd64 \
   . --push
 
 docker buildx build --platform linux/amd64 \
+  -f runpod/synthesize/Dockerfile \
   -t <seu-usuario>/novoaudio-synthesize:latest \
-  runpod/synthesize --push
+  . --push
 
 docker buildx build --platform linux/amd64 \
   -t <seu-usuario>/novoaudio-evaluate:latest \
@@ -131,7 +133,7 @@ curl -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_TRANSLATE/runsync" \
 curl -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_SYNTHESIZE/runsync" \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"input": {"text": "Olá, mundo.", "target_seconds": 2.0, "output_key": "test/synth.wav"}}'
+  -d '{"input": {"translated_text": "Ola, mundo.", "target_seconds": 2.0, "output_key": "test/synth.wav"}}'
 
 curl -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_EVALUATE/runsync" \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
@@ -171,13 +173,18 @@ aqui.)*
 - **`evaluate` só transcreve.** O cálculo de CER (comparar a transcrição com
   o texto alvo) é lógica pura de CPU e vive em `packages/pipeline/quality.py`
   (T0.11), não em GPU.
-- Cada `handler.py` dos 4 workers de áudio duplica a mesma dúzia de linhas
-  de I/O com R2 em vez de importar um módulo compartilhado — proposital:
-  cada worker é seu próprio contexto de build Docker isolado, e a
-  duplicação é mais simples que resolver isso com um pacote local
-  instalável. `translate` é a exceção: importa de verdade
-  `packages/pipeline/translation.py` e `packages/ptbr/syllables.py` (por
-  isso o build dele usa a raiz do repo como contexto, não `runpod/translate/`).
+- `separate_stems`, `transcribe` e `evaluate` duplicam a mesma dúzia de
+  linhas de I/O com R2 em vez de importar um módulo compartilhado —
+  proposital: contexto de build isolado de cada um, e duplicar é mais
+  simples que um pacote local instalável. `translate` e `synthesize` são a
+  exceção: importam de verdade `packages/pipeline/*` (e `translate` também
+  `packages/ptbr/syllables.py`) — por isso o build dos dois usa a raiz do
+  repo como contexto, não a pasta do worker.
+- **Pausa `[pause X.Ys]` conta DENTRO do orçamento de tokens do MOSS-TTS,
+  não soma por cima** — confirmado experimentalmente (mesmo texto, mesmos
+  `tokens=100`, com e sem pausa de 2s, deu exatamente a mesma duração
+  total). Ver `packages/pipeline/synthesis.py` pra detalhes e implicação
+  no cálculo.
 - **Tradução não usa mais Claude/Anthropic** — decisão do dono do produto,
   trocado por Qwen2.5-7B-Instruct self-hosted (mesmo padrão dos outros
   workers). Ver CLAUDE.md.

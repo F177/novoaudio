@@ -1,0 +1,7 @@
+runpod~=1.7
+# torch sem pin resolve pra binários de CUDA mais novos que o driver dos
+# workers do RunPod suporta (mesmo problema encontrado em separate_stems) —
+# travar numa build de CUDA 12.1, já validada rodando de verdade.
+torch==2.2.2
+transformers
+accelerate

@@ -23,6 +23,20 @@ alvo TOTAL do segmento, já incluindo o tempo que as pausas vão ocupar —
 não subtrair as pausas antes de converter. É consistente com a
 calibração do T0.6 (`calibration.json`), que já foi medida sobre textos
 com marcadores de pausa embutidos.
+
+**Validação real (36 segmentos, `translation_data/synth_validation_results.json`
+— gitignored, dados locais):** 86,1% dos segmentos ficaram dentro de ±8%
+após no máximo 1 ajuste (meta do T0.9: ≥85%). As falhas são quase todas
+segmentos com alvo muito curto (0,3-0,8s) — parece existir um **piso de
+duração mínima viável** do MOSS-TTS: pedir `tokens` correspondentes a
+menos de ~1s às vezes ainda produz 1,7-3,3s de áudio, não importa o
+ajuste na segunda tentativa. `adjust_tokens_for_retry` assume que a
+relação segundos/token é aproximadamente linear e escalável — isso quebra
+perto desse piso. Não investigado mais a fundo ainda; se segmentos muito
+curtos continuarem sendo um problema recorrente em produção, vale medir
+onde fica esse piso exatamente e tratar segmentos abaixo dele como um
+caso especial (ex.: fundir com o vizinho antes de sintetizar, como
+`segmentation.py` já faz pra segmentos <0,3s).
 """
 
 from __future__ import annotations

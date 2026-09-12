@@ -28,10 +28,14 @@ que já tinham funcionado.
 - Escolhe sempre o candidato de tradução melhor-pontuado (`rank_candidates`
   já ordena) — não há edição manual de segmento neste CLI (isso é o
   editor web, Fase 1).
+- Entrada sem faixa de vídeo (ex.: mp3/m4a) é aceita: pula o remux final e
+  entrega só o áudio dublado (`.wav`) — útil pra validar a qualidade do
+  pipeline antes de ter vídeo de teste de verdade.
 
 Uso:
     python scripts/dub.py video.mp4
     python scripts/dub.py video.mp4 --out saida.mp4 --cache-dir .cache/dub --force
+    python scripts/dub.py --r2-key "pasta/video.mp4"   # baixa do bucket R2 antes
     make pipeline-cli VIDEO=path/to.mp4
 """
 
@@ -39,11 +43,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import soundfile as sf
+from dotenv import load_dotenv
 
 from packages.pipeline.assembly import (
     TimedAudio,
@@ -62,9 +68,25 @@ from packages.pipeline.quality import (
     silencio_anormal,
 )
 from packages.pipeline.segmentation import Segment, Word, segment_words
+from scripts import r2
 from scripts.pod_runner import PodConfig, download_from_pod, run_on_pod, upload_to_pod
 
 SYNTH_SAMPLE_RATE = 24000  # MOSS-TTS-v1.5, ver packages/pipeline/synthesis.py
+
+
+def _sanitize_for_dirname(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+
+
+def _has_video_stream(path: Path) -> bool:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v",
+            "-show_entries", "stream=index", "-of", "csv=p=0", str(path),
+        ],
+        check=True, capture_output=True, text=True,
+    )
+    return bool(result.stdout.strip())
 
 
 def words_from_whisperx_transcript(transcript: dict[str, Any]) -> list[Word]:
@@ -372,7 +394,14 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
 
     final_audio_path = cached("final_audio.wav")
     sf.write(final_audio_path, normalized, SYNTH_SAMPLE_RATE)
-    remux_with_video(video_path, final_audio_path, out_path)
+
+    if _has_video_stream(video_path):
+        remux_with_video(video_path, final_audio_path, out_path)
+    else:
+        # entrada sem faixa de vídeo (ex.: mp3/m4a) — não há o que remuxar,
+        # entrega o áudio dublado direto (ver docstring do módulo).
+        out_path = out_path.with_suffix(".wav")
+        out_path.write_bytes(final_audio_path.read_bytes())
 
     report = {
         "video": str(video_path),
@@ -387,19 +416,36 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
 
 
 def main() -> None:
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("video", type=Path)
+    parser.add_argument("video", type=Path, nargs="?", default=None)
+    parser.add_argument("--r2-key", default=None, help="baixa o vídeo/áudio do bucket R2 por chave")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
-    out_path = args.out or args.video.with_name(f"{args.video.stem}.dub{args.video.suffix}")
-    cache_dir = args.cache_dir or Path(".cache/dub") / args.video.stem
+    if not args.video and not args.r2_key:
+        parser.error("informe o caminho do vídeo ou --r2-key")
 
-    report = run_pipeline(args.video, out_path, cache_dir, args.force)
+    if args.r2_key:
+        video_name = _sanitize_for_dirname(Path(args.r2_key).name)
+        cache_dir = args.cache_dir or Path(".cache/dub") / Path(video_name).stem
+        local_video = cache_dir / f"source{Path(args.r2_key).suffix}"
+        if args.force or not local_video.exists():
+            print(f"baixando {args.r2_key} do R2...")
+            r2.download(args.r2_key, local_video)
+        video_path = local_video
+    else:
+        video_path = args.video
+        cache_dir = args.cache_dir or Path(".cache/dub") / video_path.stem
+
+    out_path = args.out or video_path.with_name(f"{video_path.stem}.dub{video_path.suffix}")
+
+    report = run_pipeline(video_path, out_path, cache_dir, args.force)
     print(json.dumps(report["stage_success"], indent=2, ensure_ascii=False))
-    print(f"vídeo dublado: {out_path}")
+    print(f"saída: {report['output']}")
     print(f"relatório completo: {cache_dir / 'report.json'}")
 
 

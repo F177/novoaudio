@@ -1,0 +1,21 @@
+{
+  "_aviso": "ISSO É UM EXEMPLO/DUMMY para mostrar o formato esperado — não é uma calibração real. O T0.6 exige ouvir os áudios e decidir os coeficientes de verdade antes de criar o `calibration.json` de verdade (sem o .example). Apagar este arquivo quando o real existir.",
+  "formula": "duracao_segundos = a + b * silabas + c * segundos_de_pausa_pedidos",
+  "coefficients": {
+    "a": 0.51,
+    "b": 0.169,
+    "c": 0.0
+  },
+  "r_squared": 0.82,
+  "n_samples": 300,
+  "phrase_sources": {
+    "template": 210,
+    "qwen_llm": 90
+  },
+  "calibrated_at": "2026-09-12",
+  "calibrated_by": "preencher com quem decidiu os coeficientes",
+  "known_issues": {
+    "short_segments_below_5_syllables": "Variância alta e sistemática: a mesma frase de 4 sílabas ('Tudo mudou.') saiu com durações entre 0.80s e 1.20s em execuções diferentes — 50% de variação. O modelo linear simples não captura essa faixa bem; considerar uma tolerância maior ou uma regra separada para segmentos muito curtos em vez de confiar cegamente na regressão.",
+    "pause_coefficient": "Na rodada preliminar, incluir segundos de pausa pedidos como variável elevou o R² de 0.82 para 0.91, mas o coeficiente resultante (~4.8) parecia alto demais para fazer sentido literal — pode ser colinearidade (só as frases mais longas do conjunto tinham pausa) em vez de um efeito real do marcador [pause X.Ys]. Ouvir os áudios com pausa antes de confiar nesse coeficiente."
+  }
+}

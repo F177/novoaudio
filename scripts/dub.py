@@ -271,6 +271,13 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
             seg_id = f"seg{i:04d}"
             candidates = translations.get(seg_id, [])
             best_text = candidates[0]["text"] if candidates else s.texto
+            # Tentativa revertida: dar mais tempo do que a isocronia original
+            # pedia (via budget.seconds_needed) parecia corrigir cortes num
+            # teste isolado de 3 segmentos, mas rodando nos 16 reais fez o
+            # MOSS-TTS entrar em loop de repetição pra preencher o tempo
+            # extra (ex.: "toma nota" repetido 70+ vezes) — piorou o CER
+            # geral em vez de melhorar. Duração alvo da síntese volta a ser
+            # a isocronia original; ver commit da reversão pro porquê.
             synth_jobs.append(
                 {
                     "id": seg_id,

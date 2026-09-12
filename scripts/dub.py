@@ -263,8 +263,8 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
     translations = {t["id"]: t["candidates"] for t in json.loads(translations_path.read_text())}
 
     # --- 6. síntese com duração e pausa (remoto, MOSS-TTS) ---
-    synth_meta_path = cached("synth_meta.json")
     synth_dir = cached("synth")
+    synth_meta_path = synth_dir / "synth_meta.json"
     if needs(synth_meta_path):
         synth_jobs = []
         for i, s in enumerate(segments):

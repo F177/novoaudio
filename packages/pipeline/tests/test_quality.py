@@ -1,10 +1,12 @@
 import json
 
 import numpy as np
+import pytest
 
 from packages.pipeline.quality import (
     QualityFlags,
     cer_alto,
+    character_error_rate,
     clipping,
     evaluate_segment,
     fora_duracao,
@@ -19,6 +21,26 @@ SAMPLE_RATE = 16000
 def _tone(seconds: float, amplitude: float = 0.3) -> np.ndarray:
     t = np.arange(int(seconds * SAMPLE_RATE)) / SAMPLE_RATE
     return (amplitude * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+
+def test_character_error_rate_zero_for_identical_text() -> None:
+    assert character_error_rate("ola mundo", "ola mundo") == 0.0
+
+
+def test_character_error_rate_full_for_completely_different_text() -> None:
+    assert character_error_rate("a", "b") == pytest.approx(1.0)
+
+
+def test_character_error_rate_partial_for_one_edit() -> None:
+    assert character_error_rate("teste", "testa") == pytest.approx(1 / 5)
+
+
+def test_character_error_rate_empty_reference_and_hypothesis_is_zero() -> None:
+    assert character_error_rate("", "") == 0.0
+
+
+def test_character_error_rate_empty_reference_nonempty_hypothesis_is_one() -> None:
+    assert character_error_rate("", "algo") == 1.0
 
 
 def test_fora_duracao_true_when_outside_tolerance() -> None:

@@ -51,6 +51,31 @@ def fora_duracao(achieved_seconds: float, target_seconds: float, *, on_screen: b
     return not (low <= achieved_seconds <= high)
 
 
+def character_error_rate(reference: str, hypothesis: str) -> float:
+    """CER round-trip (CLAUDE.md glossário): distância de edição por caractere
+    entre o texto que foi sintetizado (`reference`) e o que o ASR devolveu ao
+    transcrever de volta o áudio sintetizado (`hypothesis`), normalizada pelo
+    tamanho da referência. 0.0 = idêntico; pode passar de 1.0 se a hipótese
+    tiver bem mais inserções que o tamanho da referência.
+    """
+    ref = reference.strip()
+    hyp = hypothesis.strip()
+    if not ref:
+        return 0.0 if not hyp else 1.0
+    return _levenshtein(ref, hyp) / len(ref)
+
+
+def _levenshtein(a: str, b: str) -> int:
+    previous = list(range(len(b) + 1))
+    for i, char_a in enumerate(a, start=1):
+        current = [i] + [0] * len(b)
+        for j, char_b in enumerate(b, start=1):
+            cost = 0 if char_a == char_b else 1
+            current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
+        previous = current
+    return previous[-1]
+
+
 def cer_alto(cer: float, threshold: float = CER_THRESHOLD) -> bool:
     """CER round-trip (CLAUDE.md glossário) acima do limiar aceitável."""
     return cer > threshold

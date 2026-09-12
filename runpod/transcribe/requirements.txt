@@ -1,3 +1,12 @@
 runpod~=1.7
 whisperx==3.2.0
+# pyannote.audio==3.1.1 (pinado transitivamente pelo whisperx) usa np.NaN,
+# removido no NumPy 2.0 — travar em 1.x até o whisperx atualizar essa pin.
+numpy<2
+# mesma história: pyannote.audio==3.1.1 usa a API antiga de backend do
+# torchaudio (torchaudio.backend.*), removida nas versões novas. Travar
+# numa dupla torch/torchaudio da época (fim de 2023) que ainda tem esse
+# módulo — a mais antiga com wheel pra Python 3.12.
+torch==2.2.2
+torchaudio==2.2.2
 boto3

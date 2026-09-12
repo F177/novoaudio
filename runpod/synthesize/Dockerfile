@@ -7,14 +7,17 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # MOSS-TTS-v1.5 não é um pacote pip simples: o repo traz o código do modelo
-# (carregado via trust_remote_code=True) e pin exato de torch/transformers.
+# (carregado via trust_remote_code=True). torch/torchaudio/transformers ficam
+# atrás do extra "torch-runtime" no pyproject.toml do repo — sem o [torch-runtime]
+# o `pip install -e .` sozinho não traz nenhum deles.
 RUN git clone --depth 1 https://github.com/OpenMOSS/MOSS-TTS.git /moss-tts
-RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu128 -e /moss-tts
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu128 \
+    -e "/moss-tts[torch-runtime]"
 RUN pip install --no-cache-dir runpod boto3
 
 # FlashAttention 2 fica de fora por padrão: exige compilar do zero contra uma
 # GPU com compute capability >=8 (Ampere+) e deixa o build frágil/lento. Para
-# habilitar: `pip install -e "/moss-tts[flash-attn]"` acima.
+# habilitar: `pip install -e "/moss-tts[torch-runtime,flash-attn]"` acima.
 
 # Modelo pré-baixado na imagem (8B parâmetros — a imagem fica grande, ~16GB+).
 RUN python -c "\

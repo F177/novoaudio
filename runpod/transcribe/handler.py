@@ -14,18 +14,19 @@ import json
 import os
 import tempfile
 
+import _compat  # noqa: F401  (side effect: shim da API antiga do torchaudio)
 import boto3
-import whisperx
-from whisperx.diarize import DiarizationPipeline
+import whisperx  # noqa: E402
+from whisperx.diarize import DiarizationPipeline  # noqa: E402
 
-import runpod
+import runpod  # noqa: E402
 
 _DEVICE = "cuda"
 _LANGUAGE = "en"
 
 _asr_model = whisperx.load_model("large-v3", _DEVICE, compute_type="float16", language=_LANGUAGE)
 _align_model, _align_metadata = whisperx.load_align_model(language_code=_LANGUAGE, device=_DEVICE)
-_diarize_model = DiarizationPipeline(token=os.environ["HF_TOKEN"], device=_DEVICE)
+_diarize_model = DiarizationPipeline(use_auth_token=os.environ["HF_TOKEN"], device=_DEVICE)
 
 
 def _r2_client():

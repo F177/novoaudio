@@ -1,3 +1,5 @@
 runpod~=1.7
 demucs==4.1.0
+numpy
+scipy
 boto3

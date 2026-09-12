@@ -129,6 +129,7 @@ Antes de dizer que uma tarefa está pronta, rode `make lint && make test`.
 Estas coisas vão parecer urgentes. Não são. Não implemente sem eu pedir explicitamente:
 
 - Lip-sync facial / manipulação de vídeo
+- Dublagem ao vivo/streaming — validar o produto assíncrono (upload → dublagem em lote → editor) primeiro. Live dub é uma v2 possível, arquitetura bem diferente (ASR incremental, tradução e TTS em streaming), não uma extensão incremental deste pipeline.
 - Outros pares de idiomas além de EN→pt-BR
 - App mobile, API pública, webhooks, integrações
 - Gestão de times, papéis, permissões granulares

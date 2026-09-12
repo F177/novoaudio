@@ -30,3 +30,4 @@ Thumbs.db
 *.mp3
 .cache/
 calibration_data/
+translation_data/

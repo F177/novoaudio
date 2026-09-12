@@ -12,6 +12,20 @@ falado). **Fidelidade factual não é pontuada aqui** — o critério de
 aceite do T0.8 é explícito que isso é checagem manual (comparar 20
 candidatos contra o original), não algo que uma função pura consiga
 avaliar sem outra chamada de LLM/embeddings.
+
+**Validação real (36 segmentos de um vídeo real, `translation_data/` —
+gitignored, dados locais):** o melhor candidato bateu a tolerância de
+±20% em 81% dos segmentos com orçamento ≥10 sílabas (17/21) — dentro da
+meta de 80% do T0.8. Mas caiu pra 12,5% (2/16) em segmentos com orçamento
+<10 sílabas: numa tolerância relativa, um alvo de poucas sílabas só
+aceita erro de fração de sílaba, o que nenhuma tradução consegue
+garantir palavra por palavra. Isso não é falha deste módulo — é
+exatamente o motivo de existir a ordem de alavancas (texto → velocidade
+→ silêncio → time-stretch, ver `budget.py`): segmentos curtos dependem
+das próximas alavancas (ajuste automático no T0.9, slider manual no
+T2.4) pra fechar esse resíduo de 1-2 sílabas, não só do texto. A
+checagem manual de fidelidade factual (20 candidatos) ainda não foi
+feita — pendente.
 """
 
 from __future__ import annotations

@@ -48,7 +48,7 @@ Fundador solo. Prioridade absoluta: **simplicidade operacional e custo baixo em 
 | Separação voz/fundo | Demucs (htdemucs) | RunPod |
 | ASR + timestamps por palavra | WhisperX (large-v3) | RunPod |
 | Diarização | pyannote (via WhisperX) | RunPod |
-| Tradução | LLM via API (Claude) | API, não GPU |
+| Tradução | Qwen2.5-7B-Instruct (self-hosted) | RunPod |
 | TTS | MOSS-TTS-v1.5 (OpenMOSS-Team, 8B, Apache-2.0) | RunPod |
 | Avaliação (CER) | Whisper large-v3 | RunPod |
 | Similaridade de locutor | WavLM-TDNN / ECAPA | RunPod |
@@ -81,6 +81,7 @@ Fundador solo. Prioridade absoluta: **simplicidade operacional e custo baixo em 
 /runpod             Entrypoints de GPU — um subdiretório por endpoint serverless
   /separate_stems   Dockerfile + handler.py (Demucs)
   /transcribe       Dockerfile + handler.py (WhisperX + pyannote)
+  /translate        Dockerfile + handler.py (Qwen2.5-7B-Instruct)
   /synthesize       Dockerfile + handler.py (MOSS-TTS)
   /evaluate         Dockerfile + handler.py (Whisper large-v3, CER)
 /migrations         SQL versionado

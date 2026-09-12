@@ -32,10 +32,11 @@ que já tinham funcionado.
   entrega só o áudio dublado (`.wav`) — útil pra validar a qualidade do
   pipeline antes de ter vídeo de teste de verdade.
 
-Uso:
-    python scripts/dub.py video.mp4
-    python scripts/dub.py video.mp4 --out saida.mp4 --cache-dir .cache/dub --force
-    python scripts/dub.py --r2-key "pasta/video.mp4"   # baixa do bucket R2 antes
+Uso (rodar como módulo, `-m`, não `python scripts/dub.py` — senão
+`packages`/`scripts` não entram no sys.path e o import falha):
+    python -m scripts.dub video.mp4
+    python -m scripts.dub video.mp4 --out saida.mp4 --cache-dir .cache/dub --force
+    python -m scripts.dub --r2-key "pasta/video.mp4"   # baixa do bucket R2 antes
     make pipeline-cli VIDEO=path/to.mp4
 """
 

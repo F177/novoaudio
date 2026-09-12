@@ -18,4 +18,4 @@ eval:
 	@echo "make eval: harness de avaliação ainda não existe (Fase 3, T3.1)."
 
 pipeline-cli:
-	python scripts/dub.py $(VIDEO)
+	python -m scripts.dub $(VIDEO)

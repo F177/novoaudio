@@ -18,4 +18,4 @@ eval:
 	@echo "make eval: harness de avaliação ainda não existe (Fase 3, T3.1)."
 
 pipeline-cli:
-	@echo "make pipeline-cli: CLI ainda não existe (Fase 0, T0.12). Uso futuro: make pipeline-cli VIDEO=path/to.mp4"
+	python scripts/dub.py $(VIDEO)

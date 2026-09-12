@@ -196,3 +196,12 @@ aqui.)*
   num endpoint de teste, mas a sessão migrou pro Pod simples antes de ver
   um `COMPLETED` — trate a tabela de cold start acima como pendente até
   alguém rodar os 5 endpoints de verdade.
+- **`scripts/dub.py` (T0.12) também roda contra o Pod, não contra estes
+  5 endpoints.** `scripts/pod_worker.py` é o equivalente dos 5
+  `handler.py` acima, mas sem o envelope de job do RunPod Serverless e
+  sem R2 — cada subcomando lê/escreve arquivo local, porque o Pod é
+  acessado por SSH puro (`scripts/pod_runner.py`), não por HTTP. Isso é
+  intencional e temporário: valida a hipótese do pipeline ponta a ponta
+  antes de investir em deixar os 5 endpoints serverless realmente
+  funcionando. Quando isso acontecer, `pod_worker.py` deixa de ser
+  necessário — a lógica de modelo já está nos `handler.py`.

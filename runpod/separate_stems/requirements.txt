@@ -1,4 +1,9 @@
 runpod~=1.7
+# torch sem pin resolve pra binários de CUDA mais novos que o driver dos
+# workers do RunPod suporta ("CUDA driver too old", confirmado rodando de
+# verdade) — travar numa build de CUDA 12.1, testada e funcionando.
+torch==2.2.2
+torchaudio==2.2.2
 demucs==4.1.0
 numpy
 scipy

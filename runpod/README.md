@@ -16,15 +16,34 @@ devolve **chaves de objeto no R2**, nunca bytes de áudio na chamada.
 
 ## Build e push das imagens
 
-RunPod exige `linux/amd64`. Rodar da raiz do repo:
+RunPod exige `linux/amd64`. Rodar da raiz do repo.
+
+`transcribe` e `synthesize` são pesados (dependências frágeis, modelo de
+8B) e mudam pouco depois de prontos — por isso ficam em **duas imagens**:
+uma `base.Dockerfile` (deps + modelo, builda uma vez, raro mudar) e um
+`Dockerfile` fino em cima (`FROM <base>` + `COPY handler.py`). Mexer só na
+lógica do handler? Só reconstrói/repush a imagem fina — segundos, não
+15-20 minutos. Só refaça a base se mudar dependência/versão de modelo.
 
 ```bash
+# --- bases (raro rodar de novo) ---
+docker buildx build --platform linux/amd64 \
+  -f runpod/transcribe/base.Dockerfile \
+  --secret id=hf_token,env=HF_TOKEN \
+  -t <seu-usuario>/novoaudio-transcribe-base:latest \
+  runpod/transcribe --push
+
+docker buildx build --platform linux/amd64 \
+  -f runpod/synthesize/base.Dockerfile \
+  -t <seu-usuario>/novoaudio-synthesize-base:latest \
+  runpod/synthesize --push
+
+# --- imagens finais (essas sim mudam sempre que mexer no handler.py) ---
 docker buildx build --platform linux/amd64 \
   -t <seu-usuario>/novoaudio-separate-stems:latest \
   runpod/separate_stems --push
 
 docker buildx build --platform linux/amd64 \
-  --secret id=hf_token,env=HF_TOKEN \
   -t <seu-usuario>/novoaudio-transcribe:latest \
   runpod/transcribe --push
 
@@ -37,8 +56,12 @@ docker buildx build --platform linux/amd64 \
   runpod/evaluate --push
 ```
 
-`transcribe` precisa do `HF_TOKEN` só durante o build (baixa o modelo de
-diarização); os outros três não.
+`transcribe` precisa do `HF_TOKEN` só no build da imagem **base** (baixa o
+modelo de diarização); a imagem final e os outros três workers não.
+
+**Nota:** o `FROM` das imagens finais de `transcribe`/`synthesize` está
+com o usuário `f177` do Docker Hub fixo (é o já usado neste projeto) — se
+trocar de conta, ajustar o `FROM` nos dois `Dockerfile` antes de buildar.
 
 As imagens de `synthesize` (MOSS-TTS, 8B parâmetros) e `transcribe`
 (WhisperX large-v3 + diarização) ficam grandes — o build demora e usa

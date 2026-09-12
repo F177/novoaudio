@@ -3,7 +3,11 @@ name = "novoaudio"
 version = "0.1.0"
 description = "Dublagem automática de vídeo EN -> pt-BR"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "numpy",
+    "pyloudnorm",
+    "soundfile",
+]
 
 [project.optional-dependencies]
 dev = [

@@ -52,6 +52,7 @@ def test_build_stage_report_computes_rates() -> None:
             "within_duration_tolerance": True,
             "evaluated_ok": True,
             "any_flag": False,
+            "synthesis_attempts": 1,
         },
         {
             "translated_ok": True,
@@ -59,12 +60,14 @@ def test_build_stage_report_computes_rates() -> None:
             "within_duration_tolerance": False,
             "evaluated_ok": False,
             "any_flag": True,
+            "synthesis_attempts": 2,
         },
     ]
     report = build_stage_report(results)
     assert report["total_segments"] == 2
     assert report["translated_rate"] == 1.0
     assert report["synthesized_rate"] == 0.5
+    assert report["segments_needing_synth_retry_rate"] == 0.5
     assert report["within_duration_tolerance_rate"] == 0.5
     assert report["evaluated_rate"] == 0.5
     assert report["segments_with_any_flag_rate"] == 0.5

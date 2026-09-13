@@ -67,6 +67,7 @@ from packages.pipeline.quality import (
     character_error_rate,
     clipping,
     fora_duracao,
+    has_repetition,
     silencio_anormal,
 )
 from packages.pipeline.segmentation import Segment, Word, segment_words
@@ -74,6 +75,22 @@ from scripts import r2
 from scripts.pod_runner import PodConfig, download_from_pod, run_on_pod, upload_to_pod
 
 SYNTH_SAMPLE_RATE = 24000  # MOSS-TTS-v1.5, ver packages/pipeline/synthesis.py
+
+# Quantas vezes tentar de novo um segmento cuja síntese saiu com repetição
+# ou CER muito alto (achado real do T0.12: o MOSS-TTS às vezes entra num
+# loop e repete a frase — como a geração é estocástica, tentar de novo
+# costuma sair limpo, ver histórico da sessão). 1 = sem retry.
+MAX_SYNTH_ATTEMPTS = 3
+
+
+def _is_bad_synthesis(reference_text: str, hypothesis_text: str) -> bool:
+    """Heurística de "essa síntese saiu ruim, vale tentar de novo": ou a
+    transcrição ASR round-trip repete uma frase (loop do MOSS-TTS), ou o CER
+    é alto o bastante pra sugerir algo mais grave que erro de pronúncia
+    normal (inclui transcrição vazia, que dá CER exatamente 1.0)."""
+    return has_repetition(hypothesis_text) or character_error_rate(
+        reference_text, hypothesis_text
+    ) > 1.0
 
 
 def _sanitize_for_dirname(name: str) -> str:
@@ -120,6 +137,8 @@ def build_stage_report(segment_results: list[dict[str, Any]]) -> dict[str, Any]:
     def rate(key: str) -> float:
         return sum(1 for r in segment_results if r.get(key)) / total
 
+    needed_retry = sum(1 for r in segment_results if r.get("synthesis_attempts", 1) > 1)
+
     return {
         "total_segments": total,
         "translated_rate": rate("translated_ok"),
@@ -127,6 +146,7 @@ def build_stage_report(segment_results: list[dict[str, Any]]) -> dict[str, Any]:
         "within_duration_tolerance_rate": rate("within_duration_tolerance"),
         "evaluated_rate": rate("evaluated_ok"),
         "segments_with_any_flag_rate": rate("any_flag"),
+        "segments_needing_synth_retry_rate": needed_retry / total,
     }
 
 
@@ -262,35 +282,31 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
 
     translations = {t["id"]: t["candidates"] for t in json.loads(translations_path.read_text())}
 
+    segments_by_id = {f"seg{i:04d}": s for i, s in enumerate(segments)}
+    best_text_by_id = {}
+    for seg_id, s in segments_by_id.items():
+        candidates = translations.get(seg_id, [])
+        best_text_by_id[seg_id] = candidates[0]["text"] if candidates else s.texto
+
+    def build_synth_job(seg_id: str) -> dict[str, Any]:
+        s = segments_by_id[seg_id]
+        return {
+            "id": seg_id,
+            "translated_text": best_text_by_id[seg_id],
+            "target_seconds": s.t_fim - s.t_inicio,
+            "pausas_internas": [
+                {"after_word_index": p.after_word_index, "duration": p.duration}
+                for p in s.pausas_internas
+            ],
+            "original_word_count": len(s.texto.split()),
+            "tolerance": TOLERANCE_OFF_SCREEN,
+        }
+
     # --- 6. síntese com duração e pausa (remoto, MOSS-TTS) ---
     synth_dir = cached("synth")
     synth_meta_path = synth_dir / "synth_meta.json"
     if needs(synth_meta_path):
-        synth_jobs = []
-        for i, s in enumerate(segments):
-            seg_id = f"seg{i:04d}"
-            candidates = translations.get(seg_id, [])
-            best_text = candidates[0]["text"] if candidates else s.texto
-            # Tentativa revertida: dar mais tempo do que a isocronia original
-            # pedia (via budget.seconds_needed) parecia corrigir cortes num
-            # teste isolado de 3 segmentos, mas rodando nos 16 reais fez o
-            # MOSS-TTS entrar em loop de repetição pra preencher o tempo
-            # extra (ex.: "toma nota" repetido 70+ vezes) — piorou o CER
-            # geral em vez de melhorar. Duração alvo da síntese volta a ser
-            # a isocronia original; ver commit da reversão pro porquê.
-            synth_jobs.append(
-                {
-                    "id": seg_id,
-                    "translated_text": best_text,
-                    "target_seconds": s.t_fim - s.t_inicio,
-                    "pausas_internas": [
-                        {"after_word_index": p.after_word_index, "duration": p.duration}
-                        for p in s.pausas_internas
-                    ],
-                    "original_word_count": len(s.texto.split()),
-                    "tolerance": TOLERANCE_OFF_SCREEN,
-                }
-            )
+        synth_jobs = [build_synth_job(seg_id) for seg_id in segments_by_id]
         (cache_dir / "synth_jobs.json").write_text(
             json.dumps(synth_jobs, ensure_ascii=False), encoding="utf-8"
         )
@@ -303,7 +319,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         )
         download_from_pod(pod, f"{remote_job_dir}/synth", str(synth_dir))
 
-    synth_meta = {m["id"]: m for m in json.loads((synth_dir / "synth_meta.json").read_text())}
+    synth_meta = {m["id"]: m for m in json.loads(synth_meta_path.read_text())}
 
     # --- 7. avaliação CER round-trip (remoto, Whisper large-v3) ---
     eval_path = cached("eval.json")
@@ -326,6 +342,75 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
 
     eval_texts = {e["id"]: e["text"] for e in json.loads(eval_path.read_text())}
 
+    # --- 6b/7b. retry de segmentos com repetição/CER alto (T0.12, achado real) ---
+    synth_attempts = dict.fromkeys(synth_meta, 1)
+    for attempt in range(2, MAX_SYNTH_ATTEMPTS + 1):
+        bad_ids = [
+            seg_id
+            for seg_id in synth_meta
+            if _is_bad_synthesis(best_text_by_id.get(seg_id, ""), eval_texts.get(seg_id, ""))
+        ]
+        if not bad_ids:
+            break
+
+        retry_jobs = [build_synth_job(seg_id) for seg_id in bad_ids]
+        retry_jobs_name = f"synth_retry_{attempt}.json"
+        (cache_dir / retry_jobs_name).write_text(
+            json.dumps(retry_jobs, ensure_ascii=False), encoding="utf-8"
+        )
+        upload_to_pod(pod, str(cache_dir / retry_jobs_name), f"{remote_job_dir}/{retry_jobs_name}")
+        run_on_pod(
+            pod,
+            f"{pod.python_tts} -m scripts.pod_worker synthesize "
+            f"--input {remote_job_dir}/{retry_jobs_name} --out-dir {remote_job_dir}/synth",
+            env=hf_env,
+        )
+        retry_meta_name = f"synth_retry_meta_{attempt}.json"
+        download_from_pod(
+            pod, f"{remote_job_dir}/synth/synth_meta.json", str(cache_dir / retry_meta_name)
+        )
+        retried_meta = {m["id"]: m for m in json.loads((cache_dir / retry_meta_name).read_text())}
+        for seg_id in bad_ids:
+            download_from_pod(
+                pod, f"{remote_job_dir}/synth/{seg_id}.wav", str(synth_dir / f"{seg_id}.wav")
+            )
+            synth_meta[seg_id] = retried_meta[seg_id]
+            synth_attempts[seg_id] = attempt
+
+        retry_eval_jobs = [
+            {"id": seg_id, "audio_path": f"{remote_job_dir}/synth/{seg_id}.wav"}
+            for seg_id in bad_ids
+        ]
+        retry_eval_jobs_name = f"eval_retry_{attempt}.json"
+        (cache_dir / retry_eval_jobs_name).write_text(
+            json.dumps(retry_eval_jobs, ensure_ascii=False), encoding="utf-8"
+        )
+        upload_to_pod(
+            pod, str(cache_dir / retry_eval_jobs_name), f"{remote_job_dir}/{retry_eval_jobs_name}"
+        )
+        retry_eval_result_name = f"eval_retry_result_{attempt}.json"
+        run_on_pod(
+            pod,
+            f"{pod.python_asr} -m scripts.pod_worker evaluate --input "
+            f"{remote_job_dir}/{retry_eval_jobs_name} "
+            f"--output {remote_job_dir}/{retry_eval_result_name}",
+            env={**hf_env, "LD_LIBRARY_PATH": pod.ld_library_path_asr},
+        )
+        download_from_pod(
+            pod,
+            f"{remote_job_dir}/{retry_eval_result_name}",
+            str(cache_dir / retry_eval_result_name),
+        )
+        for e in json.loads((cache_dir / retry_eval_result_name).read_text()):
+            eval_texts[e["id"]] = e["text"]
+
+    # Persiste o estado final (com os retries já aplicados) — os arquivos que
+    # vieram do Pod nesta rodada só cobrem o lote retried, não o conjunto todo.
+    synth_meta_path.write_text(json.dumps(list(synth_meta.values()), ensure_ascii=False))
+    eval_path.write_text(
+        json.dumps([{"id": k, "text": v} for k, v in eval_texts.items()], ensure_ascii=False)
+    )
+
     # --- 8. gates de qualidade + montagem (local) ---
     background_audio, bg_sr = sf.read(background_resampled_path, dtype="float32")
     if background_audio.ndim > 1:
@@ -337,9 +422,8 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
     for i, s in enumerate(segments):
         seg_id = f"seg{i:04d}"
         target_seconds = s.t_fim - s.t_inicio
-        candidates = translations.get(seg_id, [])
-        translated_text = candidates[0]["text"] if candidates else s.texto
-        translated_ok = bool(candidates)
+        translated_text = best_text_by_id[seg_id]
+        translated_ok = bool(translations.get(seg_id))
 
         meta = synth_meta.get(seg_id)
         synthesized_ok = meta is not None
@@ -353,6 +437,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
             "traducao": translated_text,
             "translated_ok": translated_ok,
             "synthesized_ok": synthesized_ok,
+            "synthesis_attempts": synth_attempts.get(seg_id, 1),
         }
 
         if synthesized_ok and wav_path.exists():

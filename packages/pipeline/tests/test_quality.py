@@ -14,6 +14,7 @@ from packages.pipeline.quality import (
     locutor_suspeito,
     silencio_anormal,
     traducao_infiel,
+    truncado,
 )
 
 SAMPLE_RATE = 16000
@@ -85,6 +86,33 @@ def test_has_repetition_false_for_short_text() -> None:
     assert has_repetition("Mas toma nota.") is False
 
 
+def test_truncado_true_when_tail_of_reference_is_missing() -> None:
+    # T0.14: fora_duracao não pega isso por construção — o MOSS-TTS corta o
+    # texto pra caber na duração pedida, então a duração bate mesmo cortado.
+    reference = "Tudo que eles deram pra isso tá valendo zero"
+    hypothesis = "Tudo que eles deram pra isso"
+    assert truncado(reference, hypothesis) is True
+
+
+def test_truncado_false_when_content_matches() -> None:
+    reference = "Eles tinham força pra cima de todos nós juntos."
+    hypothesis = "Eles tinham força pra cima de todos nós juntos."
+    assert truncado(reference, hypothesis) is False
+
+
+def test_truncado_false_for_short_reference() -> None:
+    # Critério de aceite explícito do T0.14: referência curta (<4 palavras)
+    # não deve disparar, mesmo com a hipótese vazia (que pareceria "cortada").
+    assert truncado("Mas toma nota.", "") is False
+
+
+def test_truncado_false_for_minor_asr_paraphrase() -> None:
+    # Diferença de transcrição normal (contração lida por extenso), não corte.
+    reference = "Eles tá morrendo enfrentando inimigos."
+    hypothesis = "Ele está morrendo, enfrentando inimigos."
+    assert truncado(reference, hypothesis) is False
+
+
 def test_fora_duracao_true_when_outside_tolerance() -> None:
     assert fora_duracao(achieved_seconds=15.0, target_seconds=10.0, on_screen=True) is True
 
@@ -144,6 +172,8 @@ def test_evaluate_segment_assembles_all_flags() -> None:
         target_seconds=10.0,
         on_screen=True,
         cer=0.05,
+        reference_text="Eles tinham força pra cima de todos nós juntos.",
+        hypothesis_text="Eles tinham força pra cima de todos nós juntos.",
         fidelity_score=0.95,
         audio=_tone(1.0),
         sample_rate=SAMPLE_RATE,
@@ -153,6 +183,7 @@ def test_evaluate_segment_assembles_all_flags() -> None:
     assert flags == QualityFlags(
         fora_duracao=False,
         cer_alto=False,
+        truncado=False,
         traducao_infiel=False,
         clipping=False,
         silencio_anormal=False,
@@ -164,6 +195,7 @@ def test_quality_flags_serializes_to_json() -> None:
     flags = QualityFlags(
         fora_duracao=True,
         cer_alto=False,
+        truncado=False,
         traducao_infiel=False,
         clipping=True,
         silencio_anormal=False,
@@ -173,6 +205,7 @@ def test_quality_flags_serializes_to_json() -> None:
     assert parsed == {
         "fora_duracao": True,
         "cer_alto": False,
+        "truncado": False,
         "traducao_infiel": False,
         "clipping": True,
         "silencio_anormal": False,

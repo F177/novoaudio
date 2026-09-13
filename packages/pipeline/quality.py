@@ -107,6 +107,52 @@ def character_error_rate(reference: str, hypothesis: str) -> float:
     return _levenshtein(ref, hyp) / len(ref)
 
 
+TRUNCADO_TAIL_FRACTION = 0.25
+TRUNCADO_LENGTH_RATIO_THRESHOLD = 0.85
+TRUNCADO_TAIL_COVERAGE_THRESHOLD = 0.5
+TRUNCADO_MIN_REFERENCE_WORDS = 4
+
+
+def truncado(
+    reference: str,
+    hypothesis: str,
+    *,
+    tail_fraction: float = TRUNCADO_TAIL_FRACTION,
+    length_ratio_threshold: float = TRUNCADO_LENGTH_RATIO_THRESHOLD,
+    tail_coverage_threshold: float = TRUNCADO_TAIL_COVERAGE_THRESHOLD,
+) -> bool:
+    """Detecta corte de texto (T0.14) — achado real: `fora_duracao` é cego a
+    isso por construção (o MOSS-TTS corta a fala pra caber na duração
+    pedida, então o segmento cortado bate o alvo de duração quase exato), e
+    CER dilui pouco a perda quando é só o final de uma frase longa (ver
+    docstring de `character_error_rate`). Detecção lexical, dois sinais:
+
+    - **razão de palavras**: hipótese com bem menos palavras que a
+      referência sugere que faltou conteúdo, não importa onde.
+    - **cobertura do trecho final**: as últimas `tail_fraction` palavras da
+      referência (arredondado pra cima, mínimo 1) precisam aparecer em
+      algum lugar da hipótese — é exatamente essa cauda que o MOSS-TTS
+      derruba quando corta.
+
+    Referências curtas (<4 palavras) nunca disparam — não há trecho final
+    que faça sentido isolar, e uma frase de 2-3 palavras naturalmente tem
+    razão de palavras instável.
+    """
+    ref_words = _normalize_for_cer(reference).split()
+    hyp_words = _normalize_for_cer(hypothesis).split()
+    if len(ref_words) < TRUNCADO_MIN_REFERENCE_WORDS:
+        return False
+
+    length_ratio = len(hyp_words) / len(ref_words)
+
+    tail_len = max(1, round(len(ref_words) * tail_fraction))
+    tail = ref_words[-tail_len:]
+    hyp_word_set = set(hyp_words)
+    tail_coverage = sum(1 for w in tail if w in hyp_word_set) / len(tail)
+
+    return length_ratio < length_ratio_threshold or tail_coverage < tail_coverage_threshold
+
+
 def _levenshtein(a: str, b: str) -> int:
     previous = list(range(len(b) + 1))
     for i, char_a in enumerate(a, start=1):
@@ -207,6 +253,7 @@ def locutor_suspeito(
 class QualityFlags:
     fora_duracao: bool
     cer_alto: bool
+    truncado: bool
     traducao_infiel: bool
     clipping: bool
     silencio_anormal: bool
@@ -222,6 +269,8 @@ def evaluate_segment(
     target_seconds: float,
     on_screen: bool,
     cer: float,
+    reference_text: str,
+    hypothesis_text: str,
     fidelity_score: float,
     audio: np.ndarray,
     sample_rate: int,
@@ -232,6 +281,7 @@ def evaluate_segment(
     return QualityFlags(
         fora_duracao=fora_duracao(achieved_seconds, target_seconds, on_screen=on_screen),
         cer_alto=cer_alto(cer),
+        truncado=truncado(reference_text, hypothesis_text),
         traducao_infiel=traducao_infiel(fidelity_score),
         clipping=clipping(audio),
         silencio_anormal=silencio_anormal(audio, sample_rate, expected_pause_seconds),

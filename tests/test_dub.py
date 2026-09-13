@@ -1,4 +1,4 @@
-from scripts.dub import build_stage_report, words_from_whisperx_transcript
+from scripts.dub import _is_bad_synthesis, build_stage_report, words_from_whisperx_transcript
 
 
 def test_words_from_whisperx_transcript_flattens_and_orders_by_time() -> None:
@@ -71,3 +71,29 @@ def test_build_stage_report_computes_rates() -> None:
     assert report["within_duration_tolerance_rate"] == 0.5
     assert report["evaluated_rate"] == 0.5
     assert report["segments_with_any_flag_rate"] == 0.5
+
+
+def test_is_bad_synthesis_true_for_repetition() -> None:
+    reference = "Já dei o troco pra muitos na vida."
+    hypothesis = "Já dei o troco pra muitos na vida. Já dei o troco pra muitos na vida."
+    assert _is_bad_synthesis(reference, hypothesis) is True
+
+
+def test_is_bad_synthesis_true_for_truncation() -> None:
+    reference = "Tudo que eles deram pra isso tá valendo zero"
+    hypothesis = "Tudo que eles deram pra isso"
+    assert _is_bad_synthesis(reference, hypothesis) is True
+
+
+def test_is_bad_synthesis_true_for_intermediate_cer_without_repetition_or_truncation() -> None:
+    # T0.14: o predicado antigo (CER >= 1.0) não disparava aqui — só pegava
+    # falha catastrófica. Agora usa cer_alto (limiar do T0.13).
+    reference = "Tudo que eles deram pra isso ta valendo zero"
+    hypothesis = "Tua que ele deu pra isso ta valeu zero"
+    assert _is_bad_synthesis(reference, hypothesis) is True
+
+
+def test_is_bad_synthesis_false_for_clean_match() -> None:
+    reference = "Eles tinham força pra cima de todos nós juntos."
+    hypothesis = "Eles tinham força pra cima de todos nós juntos."
+    assert _is_bad_synthesis(reference, hypothesis) is False

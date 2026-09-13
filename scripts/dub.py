@@ -69,6 +69,7 @@ from packages.pipeline.quality import (
     fora_duracao,
     has_repetition,
     silencio_anormal,
+    truncado,
 )
 from packages.pipeline.segmentation import Segment, Word, segment_words
 from scripts import r2
@@ -84,13 +85,21 @@ MAX_SYNTH_ATTEMPTS = 3
 
 
 def _is_bad_synthesis(reference_text: str, hypothesis_text: str) -> bool:
-    """Heurística de "essa síntese saiu ruim, vale tentar de novo": ou a
-    transcrição ASR round-trip repete uma frase (loop do MOSS-TTS), ou o CER
-    é alto o bastante pra sugerir algo mais grave que erro de pronúncia
-    normal (inclui transcrição vazia, que dá CER exatamente 1.0)."""
-    return has_repetition(hypothesis_text) or character_error_rate(
-        reference_text, hypothesis_text
-    ) >= 1.0
+    """Heurística de "essa síntese saiu ruim, vale tentar de novo".
+
+    T0.14 — achado real: o predicado antigo (`has_repetition or CER >= 1.0`)
+    só pegava falha catastrófica (loop óbvio ou transcrição vazia/lixo
+    total). Um segmento com o final cortado pelo MOSS-TTS costuma sair com
+    CER moderado (~0,1-0,2 numa frase longa, ver docstring de
+    `character_error_rate`) — nunca batia `>= 1.0`, e passava incólume pro
+    relatório final. Agora usa `cer_alto` (limiar real do T0.13, medido) e
+    `truncado` (lexical, pega corte que `fora_duracao`/CER não pegam)."""
+    cer = character_error_rate(reference_text, hypothesis_text)
+    return (
+        has_repetition(hypothesis_text)
+        or truncado(reference_text, hypothesis_text)
+        or cer_alto(cer)
+    )
 
 
 def _sanitize_for_dirname(name: str) -> str:
@@ -473,6 +482,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
             flags = QualityFlags(
                 fora_duracao=fora_duracao(achieved_seconds, target_seconds, on_screen=False),
                 cer_alto=cer_alto(cer),
+                truncado=truncado(translated_text, hypothesis) if evaluated_ok else False,
                 traducao_infiel=False,
                 clipping=clipping(audio),
                 silencio_anormal=silencio_anormal(audio, sr, expected_pause_seconds),

@@ -25,6 +25,7 @@ de fato corrige) assim que houver volume.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 
 import numpy as np
@@ -79,6 +80,29 @@ def _levenshtein(a: str, b: str) -> int:
 def cer_alto(cer: float, threshold: float = CER_THRESHOLD) -> bool:
     """CER round-trip (CLAUDE.md glossário) acima do limiar aceitável."""
     return cer > threshold
+
+
+def has_repetition(text: str, min_window: int = 2, max_window: int = 12) -> bool:
+    """Detecta se `text` tem uma sequência de N palavras repetida logo em
+    seguida de si mesma (`palavra1 palavra2 ... palavra1 palavra2 ...`).
+
+    Achado real do MOSS-TTS (T0.12, ver histórico da sessão): a síntese às
+    vezes entra num loop e repete a mesma frase inteira, ou um trecho dela,
+    em vez de terminar naturalmente. Isso aparece de forma confiável na
+    transcrição ASR round-trip (`character_error_rate`'s `hypothesis`), não
+    no canal de "texto" que o próprio MOSS-TTS devolve — esse canal só
+    carrega marcadores de controle no modo de geração pura, não uma
+    transcrição real (tentativa de usá-lo direto não funcionou, ver sessão).
+    Comparação sem diferenciar maiúsculas/pontuação.
+    """
+    words = [re.sub(r"[^\w]", "", w.lower()) for w in text.split()]
+    words = [w for w in words if w]
+    n = len(words)
+    for w in range(min_window, min(max_window, n // 2) + 1):
+        for i in range(n - 2 * w + 1):
+            if words[i : i + w] == words[i + w : i + 2 * w]:
+                return True
+    return False
 
 
 def traducao_infiel(

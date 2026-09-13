@@ -10,6 +10,7 @@ from packages.pipeline.quality import (
     clipping,
     evaluate_segment,
     fora_duracao,
+    has_repetition,
     locutor_suspeito,
     silencio_anormal,
     traducao_infiel,
@@ -41,6 +42,25 @@ def test_character_error_rate_empty_reference_and_hypothesis_is_zero() -> None:
 
 def test_character_error_rate_empty_reference_nonempty_hypothesis_is_one() -> None:
     assert character_error_rate("", "algo") == 1.0
+
+
+def test_has_repetition_true_for_repeated_phrase() -> None:
+    text = "Mas toma nota, mas toma nota, mas toma nota"
+    assert has_repetition(text) is True
+
+
+def test_has_repetition_true_for_repeated_sentence() -> None:
+    text = "Já dei o troco pra muitos na vida. Já dei o troco pra muitos na vida."
+    assert has_repetition(text) is True
+
+
+def test_has_repetition_false_for_normal_sentence() -> None:
+    text = "Tudo que eles deram pra isso tá valendo zero"
+    assert has_repetition(text) is False
+
+
+def test_has_repetition_false_for_short_text() -> None:
+    assert has_repetition("Mas toma nota.") is False
 
 
 def test_fora_duracao_true_when_outside_tolerance() -> None:

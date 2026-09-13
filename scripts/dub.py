@@ -280,7 +280,10 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         )
         download_from_pod(pod, f"{remote_job_dir}/translations.json", str(translations_path))
 
-    translations = {t["id"]: t["candidates"] for t in json.loads(translations_path.read_text())}
+    translations = {
+        t["id"]: t["candidates"]
+        for t in json.loads(translations_path.read_text(encoding="utf-8"))
+    }
 
     segments_by_id = {f"seg{i:04d}": s for i, s in enumerate(segments)}
     best_text_by_id = {}
@@ -323,7 +326,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         )
         download_from_pod(pod, f"{remote_job_dir}/synth", str(synth_dir))
 
-    synth_meta = {m["id"]: m for m in json.loads(synth_meta_path.read_text())}
+    synth_meta = {m["id"]: m for m in json.loads(synth_meta_path.read_text(encoding="utf-8"))}
 
     # --- 7. avaliação CER round-trip (remoto, Whisper large-v3) ---
     eval_path = cached("eval.json")
@@ -344,7 +347,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         )
         download_from_pod(pod, f"{remote_job_dir}/eval.json", str(eval_path))
 
-    eval_texts = {e["id"]: e["text"] for e in json.loads(eval_path.read_text())}
+    eval_texts = {e["id"]: e["text"] for e in json.loads(eval_path.read_text(encoding="utf-8"))}
 
     # --- 6b/7b. retry de segmentos com repetição/CER alto (T0.12, achado real) ---
     synth_attempts = dict.fromkeys(synth_meta, 1)
@@ -373,7 +376,10 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         download_from_pod(
             pod, f"{remote_job_dir}/synth/synth_meta.json", str(cache_dir / retry_meta_name)
         )
-        retried_meta = {m["id"]: m for m in json.loads((cache_dir / retry_meta_name).read_text())}
+        retried_meta = {
+            m["id"]: m
+            for m in json.loads((cache_dir / retry_meta_name).read_text(encoding="utf-8"))
+        }
         for seg_id in bad_ids:
             download_from_pod(
                 pod, f"{remote_job_dir}/synth/{seg_id}.wav", str(synth_dir / f"{seg_id}.wav")
@@ -405,14 +411,17 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
             f"{remote_job_dir}/{retry_eval_result_name}",
             str(cache_dir / retry_eval_result_name),
         )
-        for e in json.loads((cache_dir / retry_eval_result_name).read_text()):
+        for e in json.loads((cache_dir / retry_eval_result_name).read_text(encoding="utf-8")):
             eval_texts[e["id"]] = e["text"]
 
     # Persiste o estado final (com os retries já aplicados) — os arquivos que
     # vieram do Pod nesta rodada só cobrem o lote retried, não o conjunto todo.
-    synth_meta_path.write_text(json.dumps(list(synth_meta.values()), ensure_ascii=False))
+    synth_meta_path.write_text(
+        json.dumps(list(synth_meta.values()), ensure_ascii=False), encoding="utf-8"
+    )
     eval_path.write_text(
-        json.dumps([{"id": k, "text": v} for k, v in eval_texts.items()], ensure_ascii=False)
+        json.dumps([{"id": k, "text": v} for k, v in eval_texts.items()], ensure_ascii=False),
+        encoding="utf-8",
     )
 
     # --- 8. gates de qualidade + montagem (local) ---

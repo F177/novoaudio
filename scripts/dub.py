@@ -90,7 +90,7 @@ def _is_bad_synthesis(reference_text: str, hypothesis_text: str) -> bool:
     normal (inclui transcrição vazia, que dá CER exatamente 1.0)."""
     return has_repetition(hypothesis_text) or character_error_rate(
         reference_text, hypothesis_text
-    ) > 1.0
+    ) >= 1.0
 
 
 def _sanitize_for_dirname(name: str) -> str:

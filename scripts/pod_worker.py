@@ -238,7 +238,13 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     jobs = json.loads(Path(args.input).read_text(encoding="utf-8"))
     results = []
     for job in jobs:
-        segments, _info = model.transcribe(job["audio_path"], language="pt", beam_size=5)
+        # condition_on_previous_text=True (o default) alucina texto repetido
+        # em loop em áudio curto — confirmado direto num áudio real de 4,2s,
+        # uma frase só, que sem esse ajuste virava a mesma frase 16x seguidas.
+        # Bug conhecido do faster-whisper, não do áudio sendo avaliado.
+        segments, _info = model.transcribe(
+            job["audio_path"], language="pt", beam_size=5, condition_on_previous_text=False
+        )
         text = " ".join(segment.text.strip() for segment in segments)
         results.append({"id": job["id"], "text": text})
 

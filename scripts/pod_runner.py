@@ -28,6 +28,16 @@ Config lida de variáveis de ambiente (ver `.env.example`):
     instalado no venv — a lib existe em site-packages, só não está no
     linker path por padrão. Confirmado rodando de verdade (`evaluate`
     falhava com esse erro exato até setar isso).
+
+    POD_VOICE_REFERENCE (opcional): caminho (no Pod) de um áudio curto usado
+    como voz de referência em toda síntese — sem isso, cada segmento sai com
+    uma voz diferente (achado real ouvindo o T0.12: sem `reference`, o
+    MOSS-TTS não ancora timbre nenhum, "degenera pra geração direta", nas
+    palavras do próprio código deles). Também ajudou a reduzir (não
+    eliminar) o loop de repetição em teste comparativo. Gerado uma vez com
+    `.cache/diag/test_reference_voice.py` e copiado pra
+    `<workspace>/voices/default_pt_br.wav` — cópia local em
+    `assets/voices/default_pt_br.wav` (gitignored, é áudio).
 """
 
 from __future__ import annotations
@@ -42,6 +52,7 @@ _DEFAULT_LD_LIBRARY_PATH_ASR = (
     "/root/venvs/asr/lib/python3.11/site-packages/nvidia/cudnn/lib:"
     "/root/venvs/asr/lib/python3.11/site-packages/nvidia/cublas/lib"
 )
+_DEFAULT_VOICE_REFERENCE = "voices/default_pt_br.wav"
 
 
 @dataclass
@@ -54,6 +65,7 @@ class PodConfig:
     python_asr: str
     python_tts: str
     ld_library_path_asr: str
+    voice_reference: str
 
     @classmethod
     def from_env(cls) -> PodConfig:
@@ -77,6 +89,7 @@ class PodConfig:
             ld_library_path_asr=os.environ.get(
                 "POD_LD_LIBRARY_PATH_ASR", _DEFAULT_LD_LIBRARY_PATH_ASR
             ),
+            voice_reference=os.environ.get("POD_VOICE_REFERENCE", _DEFAULT_VOICE_REFERENCE),
         )
 
 

@@ -300,6 +300,10 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
             ],
             "original_word_count": len(s.texto.split()),
             "tolerance": TOLERANCE_OFF_SCREEN,
+            # Sem isso, o MOSS-TTS não ancora nenhuma voz e sorteia um timbre
+            # novo por chamada (achado real ouvindo o T0.12: voz mudava a
+            # cada segmento). Ver docstring de PodConfig.
+            "reference_audio_path": pod.voice_reference,
         }
 
     # --- 6. síntese com duração e pausa (remoto, MOSS-TTS) ---

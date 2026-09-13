@@ -44,6 +44,28 @@ def test_character_error_rate_empty_reference_nonempty_hypothesis_is_one() -> No
     assert character_error_rate("", "algo") == 1.0
 
 
+def test_character_error_rate_ignores_case() -> None:
+    assert character_error_rate("Já dei o troco", "já dei o troco") == 0.0
+
+
+def test_character_error_rate_ignores_punctuation() -> None:
+    assert character_error_rate("Olá, mundo!", "Olá mundo") == 0.0
+
+
+def test_character_error_rate_collapses_whitespace() -> None:
+    assert character_error_rate("isso   é    bom", "isso é bom") == 0.0
+
+
+def test_character_error_rate_treats_digits_and_written_numbers_as_equal() -> None:
+    assert character_error_rate("Em 2026 aconteceu.", "em dois mil e vinte e seis aconteceu") == 0.0
+
+
+def test_character_error_rate_still_catches_real_differences_after_normalization() -> None:
+    # Não é só normalização escondendo tudo — erro de conteúdo real continua contando.
+    cer = character_error_rate("Já dei o troco pra muitos na vida.", "Já dei o troco pra ninguém.")
+    assert cer > 0.15
+
+
 def test_has_repetition_true_for_repeated_phrase() -> None:
     text = "Mas toma nota, mas toma nota, mas toma nota"
     assert has_repetition(text) is True

@@ -31,7 +31,22 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from packages.pipeline.budget import tolerance_range
+from packages.ptbr.normalize import normalize as ptbr_normalize
 
+# Piso medido em pares (texto sintetizado, transcrição ASR round-trip)
+# julgados manualmente como corretos — sem repetição, sem corte, conteúdo
+# batendo — de um vídeo de teste real do T0.12 (2026-09-13,
+# scripts/_measure_cer_floor.py). SÓ 4 pares no cache atingiam esse
+# critério com confiança (a maioria dos 16 segmentos daquela rodada tinha
+# repetição/corte/conteúdo errado — não são "bons conhecidos", são
+# exatamente o problema que T0.14 existe pra pegar). Com n=4: CER
+# 0,00-0,089, média 0,0425. Amostra pequena demais pra uma medição
+# definitiva (o ideal são uns 20, como a tarefa original pedia) — vale
+# refazer com mais dado assim que houver uma rodada de síntese mais limpa.
+# Mesmo assim, já confirma que CER_THRESHOLD=0,15 (valor original, mantido)
+# tem margem real acima do piso observado (quase 2x o máximo medido) e
+# ainda fica bem abaixo de onde erro de conteúdo real aparece nesses
+# mesmos dados (~0,36+, ver docstring de `character_error_rate`).
 CER_THRESHOLD = 0.15
 TRANSLATION_FIDELITY_THRESHOLD = 0.75
 SPEAKER_SIMILARITY_THRESHOLD = 0.75
@@ -52,15 +67,41 @@ def fora_duracao(achieved_seconds: float, target_seconds: float, *, on_screen: b
     return not (low <= achieved_seconds <= high)
 
 
+def _normalize_for_cer(text: str) -> str:
+    """Normaliza texto pra comparação de CER (T0.13): expande números por
+    extenso via `packages.ptbr.normalize` (pra "2026" e "dois mil e vinte e
+    seis" comparem iguais), minúsculas, sem pontuação, espaços colapsados.
+
+    Sem isso, o CER cru comparava a tradução (com pontuação/caixa do
+    tradutor) contra a transcrição do Whisper (pontuação/caixa própria, às
+    vezes dígitos onde a referência tem número por extenso) — ruído que
+    inflava o CER antes de existir qualquer erro real de conteúdo, achado
+    revisando os primeiros resultados de T0.12 rodando em vídeo real.
+    """
+    text = ptbr_normalize(text)
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", "", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def character_error_rate(reference: str, hypothesis: str) -> float:
     """CER round-trip (CLAUDE.md glossário): distância de edição por caractere
     entre o texto que foi sintetizado (`reference`) e o que o ASR devolveu ao
     transcrever de volta o áudio sintetizado (`hypothesis`), normalizada pelo
-    tamanho da referência. 0.0 = idêntico; pode passar de 1.0 se a hipótese
-    tiver bem mais inserções que o tamanho da referência.
+    tamanho da referência, depois de `_normalize_for_cer` nos dois lados.
+    0.0 = idêntico; pode passar de 1.0 se a hipótese tiver bem mais
+    inserções que o tamanho da referência.
+
+    **CER não pega truncamento** (T0.14 — achado real revisando por que
+    frases cortadas escapavam do gate `fora_duracao`): o MOSS-TTS corta o
+    texto pra caber na duração pedida, então o segmento truncado bate a
+    duração alvo quase exatamente E, como CER é uma média sobre a frase
+    inteira, perder as últimas palavras de uma frase longa dilui pouco o
+    número (~0,1-0,15 numa frase de 25 palavras perdendo 3). Detecção de
+    truncamento é lexical, não numérica — ver `truncado()`.
     """
-    ref = reference.strip()
-    hyp = hypothesis.strip()
+    ref = _normalize_for_cer(reference)
+    hyp = _normalize_for_cer(hypothesis)
     if not ref:
         return 0.0 if not hyp else 1.0
     return _levenshtein(ref, hyp) / len(ref)

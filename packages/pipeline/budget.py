@@ -1,9 +1,18 @@
 """Orçamento de duração.
 
-Usa a calibração do T0.6 (`packages/pipeline/calibration.json`,
-`duracao = a + b*silabas + c*segundos_de_pausa`) pra converter entre "quantas
-sílabas cabem num tempo alvo" e "quanto tempo um número de sílabas ocupa",
-dada uma velocidade de fala.
+Usa a calibração do T0.6/T0.15 (`packages/pipeline/calibration.json`,
+`duracao = a + b*silabas`, ajustada só em segmentos sem pausa) pra converter
+entre "quantas sílabas cabem num tempo alvo" e "quanto tempo um número de
+sílabas ocupa", dada uma velocidade de fala.
+
+Pausa (`[pause X.Ys]`) é tratada à parte, por subtração/soma direta 1:1 do
+tempo pedido — não por um coeficiente ajustado. T0.15: o coeficiente original
+(`c=5.6865 * segundos_de_pausa`) foi ajustado contra geração LIVRE, onde
+pausa só alongava a geração por cima; mas no regime real de produção
+(orçamento de tokens fechado), o T0.9 confirmou que uma pausa é consumida
+DENTRO do orçamento, não somada — a 12,5 Hz do tokenizer, 1s de pausa custa
+exatamente 1s de orçamento, não 5,68s. Ver `calibration.json.known_issues.
+pause_term_removed_from_formula` pra comparação completa das variantes.
 
 Ordem de alavancas quando um segmento não cabe no orçamento (T0.8/T0.9 usam
 isso pra decidir o que tentar primeiro, antes de recorrer à próxima):
@@ -36,15 +45,14 @@ _DEFAULT_CALIBRATION_PATH = Path(__file__).resolve().parent / "calibration.json"
 class Calibration:
     a: float
     b: float
-    c: float
 
 
 def load_calibration(path: Path | None = None) -> Calibration:
-    """Lê os coeficientes calibrados do `calibration.json` (T0.6)."""
+    """Lê os coeficientes calibrados do `calibration.json` (T0.6/T0.15)."""
     coef = json.loads((path or _DEFAULT_CALIBRATION_PATH).read_text(encoding="utf-8"))[
         "coefficients"
     ]
-    return Calibration(a=coef["a"], b=coef["b"], c=coef["c"])
+    return Calibration(a=coef["a"], b=coef["b"])
 
 
 def seconds_needed(
@@ -54,10 +62,14 @@ def seconds_needed(
     speed: float = 1.0,
     pause_seconds: float = 0.0,
 ) -> float:
-    """Duração estimada (s) pra sintetizar `syllables` sílabas numa dada velocidade."""
+    """Duração estimada (s) pra sintetizar `syllables` sílabas numa dada velocidade.
+
+    `pause_seconds` soma direto, 1:1 — não passa pelo coeficiente da fala
+    (ver docstring do módulo, T0.15).
+    """
     if speed <= 0:
         raise ValueError("speed precisa ser > 0")
-    return calibration.a + (calibration.b / speed) * syllables + calibration.c * pause_seconds
+    return calibration.a + (calibration.b / speed) * syllables + pause_seconds
 
 
 def syllables_that_fit(
@@ -69,12 +81,14 @@ def syllables_that_fit(
 ) -> int:
     """Quantas sílabas cabem em `target_seconds`, dada velocidade e pausas já reservadas.
 
-    Arredonda pra baixo de propósito — preferimos sobrar tempo (o segmento
-    cabe com folga) a estourar o orçamento por causa de arredondamento.
+    `pause_seconds` é descontado direto, 1:1, do tempo disponível pra fala
+    (ver docstring do módulo, T0.15). Arredonda pra baixo de propósito —
+    preferimos sobrar tempo (o segmento cabe com folga) a estourar o
+    orçamento por causa de arredondamento.
     """
     if speed <= 0:
         raise ValueError("speed precisa ser > 0")
-    available = target_seconds - calibration.a - calibration.c * pause_seconds
+    available = target_seconds - pause_seconds - calibration.a
     if available <= 0:
         return 0
     return int((available * speed) / calibration.b)

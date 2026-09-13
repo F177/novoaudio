@@ -10,14 +10,13 @@ from packages.pipeline.budget import (
     tolerance_range,
 )
 
-CALIB = Calibration(a=0.5, b=0.2, c=5.0)
+CALIB = Calibration(a=0.5, b=0.2)
 
 
 def test_load_calibration_reads_the_real_file() -> None:
     calibration = load_calibration()
     assert calibration.a > 0
     assert calibration.b > 0
-    assert calibration.c > 0
 
 
 def test_seconds_needed_matches_the_formula() -> None:
@@ -25,9 +24,46 @@ def test_seconds_needed_matches_the_formula() -> None:
 
 
 def test_seconds_needed_accounts_for_pauses() -> None:
+    # T0.15: pausa soma 1:1, não por um coeficiente ajustado (o valor exato
+    # de 1.0s é o que importa aqui, não uma auto-consistência com CALIB).
     base = seconds_needed(10, CALIB)
     with_pause = seconds_needed(10, CALIB, pause_seconds=1.0)
-    assert with_pause == pytest.approx(base + CALIB.c)
+    assert with_pause == pytest.approx(base + 1.0)
+
+
+def test_seconds_needed_pause_cost_is_1to1_with_real_calibration() -> None:
+    # T0.15: essa é a regressão real do bug — usar a calibração de verdade
+    # (não uma CALIB sintética) garante que nenhum coeficiente residual de
+    # pausa volte a se infiltrar em seconds_needed.
+    calibration = load_calibration()
+    base = seconds_needed(20, calibration)
+    with_pause = seconds_needed(20, calibration, pause_seconds=2.5)
+    assert with_pause == pytest.approx(base + 2.5)
+
+
+def test_syllables_that_fit_pause_regression_does_not_collapse_to_zero() -> None:
+    # T0.15: com o coeficiente antigo (c=5.6865), syllables_that_fit(4.0,
+    # calibracao_real, pause_seconds=1.0) dava negativo e retornava 0 —
+    # um segmento comum de 4s com 1s de pausa pedida ficava sem sílabas
+    # nenhuma pra falar. Trava esse número real, não um round-trip sintético.
+    calibration = load_calibration()
+    assert syllables_that_fit(4.0, calibration, pause_seconds=1.0) > 0
+
+
+def test_seconds_needed_matches_real_measured_durations() -> None:
+    # T0.15: números reais do CSV de calibração (linhas sem pausa, fora do
+    # conjunto excluído), não round-trip. Tolerância generosa porque o R²
+    # do ajuste é 0.83 (documentado em calibration.json known_issues), não
+    # 1.0 — o objetivo aqui é travar que a previsão fica na faixa certa
+    # contra dado real, não reproduzir cada ponto com exatidão.
+    calibration = load_calibration()
+    real_examples = [
+        (6, 1.36),  # "Foi surreal, gente." (linha 1)
+        (50, 8.16),  # duas frases de notícia (linha 150)
+    ]
+    for syllables, actual_duration in real_examples:
+        predicted = seconds_needed(syllables, calibration)
+        assert predicted == pytest.approx(actual_duration, abs=3.0)
 
 
 def test_higher_speed_needs_less_time() -> None:

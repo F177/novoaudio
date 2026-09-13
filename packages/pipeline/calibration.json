@@ -1,20 +1,20 @@
 {
-  "formula": "duracao_segundos = a + b * silabas + c * segundos_de_pausa_pedidos",
+  "formula": "duracao_segundos = a + b * silabas",
+  "variant": "no_pause",
   "coefficients": {
-    "a": 0.0665,
-    "b": 0.1784,
-    "c": 5.6865
+    "a": 0.0104,
+    "b": 0.1786
   },
-  "r_squared": 0.8082,
-  "n_samples": 321,
+  "r_squared": 0.832,
+  "n_samples": 286,
   "n_excluded": 5,
-  "calibrated_at": "2026-09-12",
-  "calibrated_by": "Felipe",
+  "calibrated_at": "2026-09-13",
+  "calibrated_by": "T0.15",
   "dataset": {
     "total_phrases": 326,
     "sources": { "template": 210, "qwen_llm": 116 },
     "registers": ["noticia", "vlog", "tutorial", "gameplay", "review", "comedia"],
-    "note": "Frases cobrindo 6 registros de fala (não só telejornal) depois de identificar que a primeira rodada só tinha notícia, o que não representa o conteúdo real do YouTube."
+    "note": "Frases cobrindo 6 registros de fala (não só telejornal) depois de identificar que a primeira rodada só tinha notícia, o que não representa o conteúdo real do YouTube. Este ajuste (T0.15, variante no_pause) usa só as 286 linhas com num_pauses==0 das 321 mantidas após exclusão — ver known_issues.pause_term_removed_from_formula."
   },
   "excluded_rows": {
     "count": 5,
@@ -24,7 +24,8 @@
     ]
   },
   "known_issues": {
-    "r_squared_below_target": "O critério de aceite do T0.6 pede R²>=0.93; ficamos em 0.81. Testei incluir o registro (noticia/vlog/tutorial/...) como variável categórica e o R² não mudou (0.8082 -> 0.8108) — ou seja, registro não é a causa principal da variância residual. Suspeita mais provável: o método de gerar frases-template concatenando cláusulas curtas desconexas (ex. 'Primeiro, você precisa abrir o programa. Confira se está tudo certo.') produz um jeito artificial de falar que o MOSS-TTS pausa/pacia de forma inconsistente, diferente de uma frase contínua real de vídeo. Decisão: aceitar 0.81 por ora e documentar, em vez de investir mais tempo re-desenhando o gerador de frases (ver scripts/calibration_templates.py) — revisitar se o T0.7/T0.8 mostrarem que o orçamento de sílabas está sistematicamente errado na prática.",
+    "pause_term_removed_from_formula": "T0.15: o termo de pausa original (`c=5.6865 * segundos_de_pausa`) foi ajustado contra geração LIVRE (sem orçamento de tokens fechado), onde mais pausa só alongava a geração por cima. Mas o T0.9 confirmou que, no regime real de produção (orçamento fechado, `tokens = duration_to_tokens(target_seconds)`), uma pausa `[pause X.Ys]` é consumida DENTRO do orçamento de tokens, não somada — então usar esse `c` em `budget.py` subtraía 5,68s do orçamento por segundo de pausa pedido, chegando a zerar `syllables_that_fit` em segmentos comuns (`syllables_that_fit(4.0, pause_seconds=1.0)` dava negativo). Comparei 3 variantes nas mesmas 321 linhas (exclusões de sempre): pause_seconds (fórmula antiga, com todas as linhas) a=0.0665 b=0.1784 c=5.6865 R²=0.8082; pause_count (custo fixo por marcador de pausa, não por segundo) a=0.0158 b=0.1785 c=4.2530 R²=0.8101; no_pause tirando só a coluna de pausa mas mantendo todas as 321 linhas a=0.8331 b=0.1686 R²=0.7152 (pior — linhas com pausa real têm duração inflada que 'sílabas' sozinho não explica, contaminando a,b). Refazendo no_pause só nas 286 linhas com num_pauses==0: a=0.0104 b=0.1786 R²=0.8320 — melhor R² das 4 opções e a única consistente com o achado do T0.9. Escolha: usar esta fórmula (sem termo de pausa) pra sílabas/duração de fala, e tratar pausa em `budget.py` por subtração direta 1:1 do tempo pedido em `[pause X.Ys]` do orçamento disponível, não por coeficiente ajustado.",
+    "r_squared_below_target": "O critério de aceite do T0.6 pede R²>=0.93; ficamos em 0.83 (era 0.81 com o termo de pausa, mas medido em 321 linhas em vez de 286 — não é diretamente comparável). Testei incluir o registro (noticia/vlog/tutorial/...) como variável categórica e o R² não mudou (0.8082 -> 0.8108 na fórmula antiga) — ou seja, registro não é a causa principal da variância residual. Suspeita mais provável: o método de gerar frases-template concatenando cláusulas curtas desconexas (ex. 'Primeiro, você precisa abrir o programa. Confira se está tudo certo.') produz um jeito artificial de falar que o MOSS-TTS pausa/pacia de forma inconsistente, diferente de uma frase contínua real de vídeo. Decisão: aceitar ~0.83 por ora e documentar, em vez de investir mais tempo re-desenhando o gerador de frases (ver scripts/calibration_templates.py) — revisitar se o T0.7/T0.8 mostrarem que o orçamento de sílabas está sistematicamente errado na prática.",
     "short_segments_below_5_syllables": "Sem dado limpo: as únicas 2 amostras <5 sílabas no lote eram justamente as duas frases em chinês (excluídas). Não temos ainda evidência real sobre o comportamento do modelo em segmentos muito curtos — precisa de uma coleta dedicada depois.",
     "background_noise_during_pauses": "Ouvindo os áudios (167_56sil_0pause.wav), o MOSS-TTS não gera silêncio digital puro nas pausas entre frases — gera um chão de ruído de ~-45 a -47 dBFS contra picos de fala de ~-21 dBFS (confirmado via análise de RMS). Não há parâmetro documentado no modelo pra controlar isso. Mitigação proposta: aplicar noise gate nos trechos que sabemos serem pausa (já que os marcamos com `[pause X.Ys]`) na montagem (T0.10) ou pós-processamento da síntese (T0.9).",
     "flat_delivery_on_concatenated_clauses": "Ouvindo 172_56sil_0pause.wav (template, 4 cláusulas desconexas coladas) vs. 212_19sil_0pause.wav (Qwen, uma frase natural única com '!'), o segundo soou nitidamente mais natural/emotivo. Hipóteses: (1) pontuação como '!' é uma alavanca implícita de emoção que o modelo usa, já que não há parâmetro de tom explícito; (2) gerações mais longas (56 sílabas em 4 sentenças) parecem 'achatar' a expressividade ao longo do clipe, diferente de uma frase curta única. Segmentos reais do produto vêm de fala contínua (T0.5), não de cláusulas coladas artificialmente — esse problema específico deve ser mais brando em produção do que nos dados de calibração, mas vale preservar pontuação expressiva do original na tradução (T0.8)."

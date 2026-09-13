@@ -164,10 +164,34 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
     default_tolerance = 0.08
 
     processor = AutoProcessor.from_pretrained(repo_id, trust_remote_code=True)
-    processor.audio_tokenizer = processor.audio_tokenizer.to(device)
     model = AutoModel.from_pretrained(
-        repo_id, trust_remote_code=True, torch_dtype=torch.bfloat16
+        repo_id, trust_remote_code=True, torch_dtype=torch.bfloat16, attn_implementation="sdpa"
     ).to(device)
+
+    if args.lora_adapter_path:
+        # Ver scripts/pod_lora_train.py pro porquê desses dois workarounds
+        # (peft não foi feito pensando nesta classe de modelo). merge_and_unload
+        # funde o adapter nos pesos base — necessário porque manter o wrapper
+        # do peft ativo durante generate() deu CUBLAS_STATUS_EXECUTION_FAILED
+        # (confirmado testando; funde-e-descarta não teve esse problema).
+        from peft import PeftModel
+
+        original_get_input_embeddings = type(model).get_input_embeddings
+        type(model).get_input_embeddings = lambda self, input_ids=None: (
+            original_get_input_embeddings(self, input_ids)
+            if input_ids is not None
+            else self.language_model.get_input_embeddings()
+        )
+        if not hasattr(type(model), "prepare_inputs_for_generation"):
+            type(model).prepare_inputs_for_generation = lambda self, *a, **k: {}
+
+        torch.cuda.empty_cache()
+        model = PeftModel.from_pretrained(model, args.lora_adapter_path, is_trainable=False)
+        model = model.merge_and_unload()
+
+    # audio_tokenizer só entra na GPU depois do adapter fundido — carregar o
+    # PeftModel sozinho já quase enche 24GB, confirmado na prática.
+    processor.audio_tokenizer = processor.audio_tokenizer.to(device)
 
     def synthesize_once(text: str, tokens: int, reference: list[str] | None, out_path: Path):
         message = processor.build_user_message(
@@ -273,6 +297,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = subparsers.add_parser("synthesize")
     p.add_argument("--input", required=True)
     p.add_argument("--out-dir", required=True)
+    p.add_argument(
+        "--lora-adapter-path",
+        default=None,
+        help="caminho (no Pod) de um adapter LoRA já treinado; funde nos pesos base antes de gerar",
+    )
     p.set_defaults(func=cmd_synthesize)
 
     p = subparsers.add_parser("evaluate")

@@ -38,6 +38,12 @@ Config lida de variáveis de ambiente (ver `.env.example`):
     `.cache/diag/test_reference_voice.py` e copiado pra
     `<workspace>/voices/default_pt_br.wav` — cópia local em
     `assets/voices/default_pt_br.wav` (gitignored, é áudio).
+
+    POD_LORA_ADAPTER_PATH (opcional, sem default): caminho (no Pod, absoluto —
+    não é relativo a `workspace` como os outros) de um adapter LoRA treinado
+    (`scripts/pod_lora_train.py`) pra fundir nos pesos base antes de
+    sintetizar. Vazio = usa o MOSS-TTS sem fine-tuning, comportamento
+    original. Cópia local de cada adapter em `.cache/lora_checkpoints/`.
 """
 
 from __future__ import annotations
@@ -66,6 +72,7 @@ class PodConfig:
     python_tts: str
     ld_library_path_asr: str
     voice_reference: str
+    lora_adapter_path: str | None
 
     @classmethod
     def from_env(cls) -> PodConfig:
@@ -90,6 +97,7 @@ class PodConfig:
                 "POD_LD_LIBRARY_PATH_ASR", _DEFAULT_LD_LIBRARY_PATH_ASR
             ),
             voice_reference=os.environ.get("POD_VOICE_REFERENCE", _DEFAULT_VOICE_REFERENCE),
+            lora_adapter_path=os.environ.get("POD_LORA_ADAPTER_PATH") or None,
         )
 
 

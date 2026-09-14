@@ -1,5 +1,6 @@
 from packages.pipeline.segmentation import InternalPause
 from packages.pipeline.synthesis import (
+    MIN_SYNTHESIS_TOKENS,
     adjust_tokens_for_retry,
     apply_ipa_overrides,
     duration_to_tokens,
@@ -10,7 +11,6 @@ from packages.pipeline.synthesis import (
 
 def test_duration_to_tokens_uses_12_5hz() -> None:
     assert duration_to_tokens(8.0) == 100
-    assert duration_to_tokens(1.0) == 12  # round(12.5) == 12, Python arredonda pro par (banker's)
 
 
 def test_duration_to_tokens_includes_pause_time() -> None:
@@ -18,6 +18,19 @@ def test_duration_to_tokens_includes_pause_time() -> None:
     with_pause_budget = duration_to_tokens(10.0)
     without_pause_budget = duration_to_tokens(8.0)
     assert with_pause_budget > without_pause_budget
+
+
+def test_duration_to_tokens_never_goes_below_moss_tts_delay_pattern_floor() -> None:
+    # T0.9/investigação de 2026-09-14: abaixo de MIN_SYNTHESIS_TOKENS o
+    # "delay pattern" (n_vq=32 codebooks) nunca completa um ciclo — o
+    # segmento sai vazio/garbled, não importa quão curto seja o alvo real.
+    assert duration_to_tokens(0.3) == MIN_SYNTHESIS_TOKENS
+    assert duration_to_tokens(1.0) == MIN_SYNTHESIS_TOKENS
+
+
+def test_duration_to_tokens_above_floor_is_unaffected() -> None:
+    # 8s * 12.5 = 100 tokens, bem acima do piso — não deve ser clampado.
+    assert duration_to_tokens(8.0) > MIN_SYNTHESIS_TOKENS
 
 
 def test_inject_pauses_no_pauses_returns_text_unchanged() -> None:
@@ -90,3 +103,12 @@ def test_adjust_tokens_for_retry_never_returns_zero_or_negative() -> None:
         current_tokens=100, achieved_seconds=1000.0, target_seconds=0.01
     )
     assert result >= 1
+
+
+def test_adjust_tokens_for_retry_never_goes_below_moss_tts_delay_pattern_floor() -> None:
+    # Um segmento curto que já falhou por estar abaixo do piso não deve
+    # pedir tokens ainda mais baixos na tentativa seguinte.
+    result = adjust_tokens_for_retry(
+        current_tokens=100, achieved_seconds=1000.0, target_seconds=0.01
+    )
+    assert result == MIN_SYNTHESIS_TOKENS

@@ -27,16 +27,32 @@ com marcadores de pausa embutidos.
 **Validação real (36 segmentos, `translation_data/synth_validation_results.json`
 — gitignored, dados locais):** 86,1% dos segmentos ficaram dentro de ±8%
 após no máximo 1 ajuste (meta do T0.9: ≥85%). As falhas são quase todas
-segmentos com alvo muito curto (0,3-0,8s) — parece existir um **piso de
-duração mínima viável** do MOSS-TTS: pedir `tokens` correspondentes a
-menos de ~1s às vezes ainda produz 1,7-3,3s de áudio, não importa o
-ajuste na segunda tentativa. `adjust_tokens_for_retry` assume que a
-relação segundos/token é aproximadamente linear e escalável — isso quebra
-perto desse piso. Não investigado mais a fundo ainda; se segmentos muito
-curtos continuarem sendo um problema recorrente em produção, vale medir
-onde fica esse piso exatamente e tratar segmentos abaixo dele como um
-caso especial (ex.: fundir com o vizinho antes de sintetizar, como
-`segmentation.py` já faz pra segmentos <0,3s).
+segmentos com alvo muito curto (0,3-0,8s) — havia um **piso de duração
+mínima viável** do MOSS-TTS, na época não explicado: pedir `tokens`
+correspondentes a menos de ~1s às vezes ainda produz 1,7-3,3s de áudio,
+não importa o ajuste na segunda tentativa.
+
+**Explicado e corrigido (investigação de 2026-09-14, ver
+`docs/moss_tts_investigation.md`):** o MOSS-TTS-v1.5 usa `n_vq=32`
+codebooks de áudio em padrão "delay pattern" (cada codebook começa
+defasado do anterior, tipo MusicGen) — o modelo precisa de pelo menos
+~`n_vq` frames só pra todos os canais entrarem em regime antes de
+produzir qualquer coisa coerente. A 12,5 Hz isso é `32/12,5 = 2,56s`.
+Pedir menos tokens que isso corta o ciclo pela metade: confirmado
+experimentalmente que segmentos assim saem com hipótese de ASR vazia,
+texto sem nenhuma relação com o pedido, ou a mesma palavra bugada em
+várias grafias — não é falta de sorte no retry, é estrutural. Dando pelo
+menos `MIN_SYNTHESIS_TOKENS` de orçamento, o mesmo texto sintetiza
+correto (confirmado em 2 de 3 casos reais testados; o terceiro, uma
+palavra isolada sem frase ao redor, ainda falhou mesmo com mais tokens —
+parece precisar de mais contexto textual, não só mais tempo; não
+resolvido ainda).
+
+`duration_to_tokens`/`adjust_tokens_for_retry` agora nunca pedem menos que
+o piso — o excedente de duração fica para a montagem tratar (comprimir ou
+just aceitar a folga e deixar o gate `fora_duracao` sinalizar pra revisão
+manual; time-stretch de verdade ainda não implementado, ver
+`docs/moss_tts_investigation.md`).
 """
 
 from __future__ import annotations
@@ -47,6 +63,15 @@ from packages.pipeline.segmentation import InternalPause
 
 TOKENS_PER_SECOND = 12.5
 
+# MOSS-TTS-v1.5 usa n_vq=32 (ver configuration_moss_tts.py do modelo,
+# confirmado no cache do Pod) — abaixo disso o "delay pattern" nunca
+# completa um ciclo. +25% de margem sobre o piso teórico (2,56s) porque a
+# validação real mostrou que só acertar exatamente n_vq/12.5 ainda deixa
+# pouca folga pro conteúdo de fato caber antes do fim do ciclo.
+MOSS_TTS_N_VQ = 32
+MIN_SYNTHESIS_SECONDS = (MOSS_TTS_N_VQ / TOKENS_PER_SECOND) * 1.25
+MIN_SYNTHESIS_TOKENS = round(MIN_SYNTHESIS_SECONDS * TOKENS_PER_SECOND)
+
 
 def duration_to_tokens(target_seconds: float) -> int:
     """Converte segundos em `tokens` pro MOSS-TTS (12,5 Hz, granularidade 80ms).
@@ -54,8 +79,11 @@ def duration_to_tokens(target_seconds: float) -> int:
     `target_seconds` é a duração TOTAL alvo do segmento, já incluindo
     qualquer pausa interna que for injetada no texto — ver docstring do
     módulo sobre por que pausas não somam por cima desse orçamento.
+
+    Nunca devolve menos que `MIN_SYNTHESIS_TOKENS` — abaixo do piso do
+    delay pattern do MOSS-TTS, ver docstring do módulo.
     """
-    return round(target_seconds * TOKENS_PER_SECOND)
+    return max(MIN_SYNTHESIS_TOKENS, round(target_seconds * TOKENS_PER_SECOND))
 
 
 def inject_pauses(
@@ -121,8 +149,12 @@ def adjust_tokens_for_retry(
     síntese específica (`achieved_seconds / current_tokens`) — o modelo não
     bate exatamente 12,5 Hz sempre, e escalar pela taxa real corrige o erro
     sistemático daquele texto específico, não só arredondamento.
+
+    Nunca devolve menos que `MIN_SYNTHESIS_TOKENS` (mesmo piso de
+    `duration_to_tokens`) — sem isso, um segmento curto que já falhou por
+    estar abaixo do piso pediria tokens ainda mais baixos na retry.
     """
     if current_tokens <= 0 or achieved_seconds <= 0:
         return duration_to_tokens(target_seconds)
     seconds_per_token = achieved_seconds / current_tokens
-    return max(1, round(target_seconds / seconds_per_token))
+    return max(MIN_SYNTHESIS_TOKENS, round(target_seconds / seconds_per_token))

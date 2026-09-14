@@ -142,32 +142,97 @@ Isso bate com o gap já documentado em `packages/pipeline/calibration.json`
 (`known_issues.short_segments_below_5_syllables`) — segmento curto parece
 ser onde o MOSS-TTS realmente quebra, não repetição de frase longa.
 
+### 2026-09-14 (continuação) — piso de tokens implementado e validado
+
+Confirmado o mecanismo: `n_vq=32` (config do MOSS-TTS-v1.5, arquivo
+`configuration_moss_tts.py`) — a 12,5 Hz isso é **2,56s**, batendo quase
+exato com o limiar visto nos dados reais (tudo ≤2,5s ruim, tudo ≥3,8s
+limpo na rodada v6). Testado forçando 40 tokens (3,2s) em 3 segmentos
+curtos que falhavam na produção: 2 de 3 viraram fala correta e limpa (uma
+delas com match quase perfeito). O terceiro (`"decide"`, uma palavra
+isolada, sem frase ao redor) continuou falhando mesmo com até 100 tokens
+— mas colocando a MESMA palavra dentro de uma frase completa
+(`"Ele precisa decide agora."`) o resultado saiu quase perfeito com só 40
+tokens. Ou seja: existem dois problemas distintos, não um só —
+**duração curta** (resolvido) e **texto isolado sem contexto** (não
+resolvido, parece precisar de mais contexto linguístico, não mais tempo).
+
+Implementado em `packages/pipeline/synthesis.py` (commit `af0fc69`):
+`MIN_SYNTHESIS_TOKENS` (piso derivado de `n_vq` + 25% de margem, ~40
+tokens/3,2s) — `duration_to_tokens`/`adjust_tokens_for_retry` nunca pedem
+menos que isso.
+
+**Resultado real, rodada v7 completa** (`.cache/dub_v7`, mesmo vídeo de
+teste): comparando a hipótese de ASR do primeiro attempt (`eval.json`)
+segmento a segmento contra a referência, **7 de 16 segmentos saíram
+limpos (CER baixo, sem repetição, sem truncamento)** já na primeira
+tentativa — incluindo segmentos de 0,54s, 1,74s e 2,08s que antes do fix
+falhavam sempre. Antes (v6, mesmo vídeo, sem o piso): só 1-2 de 17
+limpos. Ganho real, não só teórico.
+
+**Efeito colateral esperado, ainda sem solução**: forçar mais tokens pra
+segmentos curtos produz áudio mais longo que o alvo real —
+`within_duration_tolerance_rate` caiu de 0,69 (v5) pra 0,19 (v7). O gate
+`fora_duracao` pega isso corretamente (não é falha silenciosa), mas ainda
+não existe nada que COMPRIMA o áudio de volta pro alvo (time-stretch,
+alavanca já prevista em `budget.py::LEVER_ORDER` mas nunca implementada).
+Até isso existir, segmento curto vai continuar marcado pra revisão manual
+por duração, mesmo com conteúdo correto — melhor que conteúdo errado
+E duração errada, mas não é o estado final.
+
+**Achado colateral, não investigado ainda**: alguns segmentos com
+conteúdo claramente limpo no attempt 1 (ex. `seg0006`, `seg0009` — CER
+0,0, sem repetição) ainda assim aparecem em `synth_retry_2.json`/`3.json`
+e o texto final pós-retry é BYTE-IDÊNTICO ao do attempt 1 — sugere um
+bug de bookkeeping no loop de retry do `dub.py` (talvez o texto de
+referência usado por `_is_bad_synthesis` não é exatamente o mesmo que foi
+usado pra calcular o CER que eu chequei manualmente — possível
+discrepância em qual candidato de tradução é tratado como "o melhor").
+Gasta tempo de GPU à toa, mas não parece corromper o resultado final.
+Vale investigar separadamente se sobrar tempo.
+
 ## Estado atual (não concluído)
 
-- Fix do Whisper: commitado, validado em produção real, funcionando.
+- Fix do Whisper (2 modos de alucinação): commitado, validado em produção
+  real, funcionando.
+- Piso de tokens (`MIN_SYNTHESIS_TOKENS`): commitado, validado em produção
+  real (rodada v7) — melhora clara e medida no conteúdo (7/16 limpos vs
+  1-2/17 antes). **Não precisou mexer no `generate()`/código de geração do
+  MOSS-TTS** — a causa raiz era como o NOSSO pipeline calculava o orçamento
+  de tokens, não a arquitetura do modelo em si.
 - Patch do canal de texto (`text_repetition_penalty`): protótipo em
-  `scratchpad` da sessão (não commitado, não é parte do repo ainda) — corrigido
-  pra não quebrar a máquina de estados, mas ainda não validado se o RESULTADO
-  é correto (áudio soa bem? resolve os casos reais de repetição real, se
-  ainda existirem depois do fix do Whisper?).
-- Hipótese corrente: o problema real agora é **segmento curto** (poucas
-  palavras, <1-2s de alvo), não repetição de frase — precisa de investigação
-  própria, provavelmente olhando como o delay pattern se comporta quando o
-  orçamento de tokens é muito pequeno (poucos frames pra completar o ciclo
-  de delay entre os `n_vq` canais de áudio).
+  `scratchpad` da sessão (não commitado, não é parte do repo) — abandonado
+  por ora. Depois do fix do Whisper + piso de tokens, a maior parte do que
+  parecia repetição já está explicada por outras causas; não há mais um
+  caso claro e isolado que precise dessa intervenção especificamente.
+- Dois problemas reais ainda sem solução:
+  1. **Excedente de duração** — segmento curto forçado ao piso gera áudio
+     mais longo que o alvo real; precisa de time-stretch (não implementado)
+     ou de aceitar a folga e confiar no gate `fora_duracao` pra revisão
+     manual (implementado, mas não é o estado final desejado).
+  2. **Texto isolado sem contexto** (ex. uma palavra solta como linha de
+     diálogo) — piso de tokens não resolve sozinho; parece precisar de mais
+     contexto linguístico ao redor do texto, não mais tempo de áudio.
+- Achado colateral não resolvido: bug de bookkeeping no loop de retry do
+  `dub.py` fazendo segmentos já limpos serem re-sintetizados à toa (ver
+  seção acima).
 
 ## Próximos passos (em ordem)
 
-1. Confirmar quantos dos 14/17 "ruins" da rodada v6 são de fato segmento
-   curto (correlacionar `target_seconds`/contagem de palavras com o tipo de
-   falha) — separar sinal de ruído antes de mais uma rodada de patch.
-2. Investigar a mecânica do delay pattern especificamente pra alvo de
-   token curto — ver se `n_vq` frames de delay cabem no orçamento, ou se o
-   modelo é forçado a "atropelar" o ciclo normal quando `tokens` é pequeno.
-3. Só depois disso, decidir se meche mais no `generate()` (e com qual
-   intervenção específica, orientada pelo achado acima) ou se um LoRA
-   direcionado a frases curtas (ver memória da sessão anterior) resolve
-   sem precisar de cirurgia na arquitetura.
+1. Decidir e implementar o que fazer com o excedente de duração dos
+   segmentos que bateram no piso — time-stretch de verdade (que biblioteca?
+   qualidade aceitável em que faixa de compressão?) vs. aceitar e confiar
+   no gate `fora_duracao`.
+2. Investigar o achado colateral do bookkeeping de retry (segmentos limpos
+   sendo re-sintetizados sem necessidade) — desperdício de GPU, não parece
+   corromper o resultado mas vale entender.
+3. Decidir separadamente o que fazer com "texto isolado sem contexto"
+   (uma palavra solta) — pode ser um caso pra aceitar como limitação e
+   deixar pro editor manual, já que é um padrão bem mais raro que segmento
+   curto em geral.
+4. Rodar os 10 vídeos do portão de decisão do T0.12 só depois dos itens
+   acima, pra medir a taxa de correção manual de verdade — antes disso, os
+   números ainda estão inflados pelo excedente de duração (item 1).
 
 ## Decisão (2026-09-14, confirmada explicitamente com o usuário)
 

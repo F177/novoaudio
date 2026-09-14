@@ -119,21 +119,31 @@ def run_on_pod(config: PodConfig, command: str, env: dict[str, str] | None = Non
     `env`, se passado, vira `KEY=VALUE` na frente do comando — necessário
     porque um comando SSH não-interativo não carrega `~/.bashrc` (onde
     `HF_HOME` normalmente estaria), confirmado na prática nesta sessão.
+
+    Não usa `check=True`: `subprocess.CalledProcessError` inclui o `cmd`
+    completo na mensagem, o que vazaria segredos como `HF_TOKEN` em texto
+    puro (confirmado na prática — apareceu no terminal numa falha real de
+    transcribe). Em erro, levanta com uma versão do comando com os valores
+    de `env` redigidos.
     """
     env_prefix = " ".join(f"{k}={v}" for k, v in (env or {}).items())
     full_command = f"{env_prefix} {command}".strip()
-    subprocess.run(
-        [
-            "ssh",
-            "-i",
-            config.key_path,
-            "-p",
-            str(config.port),
-            f"{config.user}@{config.host}",
-            f"cd {config.workspace} && {full_command}",
-        ],
-        check=True,
-    )
+    ssh_command = [
+        "ssh",
+        "-i",
+        config.key_path,
+        "-p",
+        str(config.port),
+        f"{config.user}@{config.host}",
+        f"cd {config.workspace} && {full_command}",
+    ]
+    result = subprocess.run(ssh_command, check=False)
+    if result.returncode != 0:
+        redacted_env_prefix = " ".join(f"{k}=***" for k in (env or {}))
+        redacted_command = f"cd {config.workspace} && {redacted_env_prefix} {command}".strip()
+        raise RuntimeError(
+            f"comando no Pod falhou (exit {result.returncode}): {redacted_command}"
+        )
 
 
 def upload_to_pod(config: PodConfig, local_path: str, remote_relative_path: str) -> None:

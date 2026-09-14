@@ -287,8 +287,23 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         # em loop em áudio curto — confirmado direto num áudio real de 4,2s,
         # uma frase só, que sem esse ajuste virava a mesma frase 16x seguidas.
         # Bug conhecido do faster-whisper, não do áudio sendo avaliado.
+        #
+        # T0.17 achado real: mesmo com o ajuste acima, o Whisper AINDA
+        # alucina frase repetida em alguns clipes curtos — confirmado
+        # contando rajadas de energia no áudio (5-6 rajadas reais, texto
+        # dizendo a mesma frase de 5-6 palavras 28x). Isso inflava muito a
+        # taxa de "síntese ruim"/retry sem o MOSS-TTS ter feito nada de
+        # errado. `repetition_penalty`/`no_repeat_ngram_size` (mesma técnica
+        # de anti-loop de LLM de texto, aplicada aqui no decoder do Whisper)
+        # resolveu 2 de 3 casos reais testados por completo; o 3º melhorou
+        # bastante mas não 100% — ver docs/known_issues se persistir.
         segments, _info = model.transcribe(
-            job["audio_path"], language="pt", beam_size=5, condition_on_previous_text=False
+            job["audio_path"],
+            language="pt",
+            beam_size=5,
+            condition_on_previous_text=False,
+            repetition_penalty=1.3,
+            no_repeat_ngram_size=3,
         )
         text = " ".join(segment.text.strip() for segment in segments)
         results.append({"id": job["id"], "text": text})

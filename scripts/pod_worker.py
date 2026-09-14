@@ -164,9 +164,17 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
     default_tolerance = 0.08
 
     processor = AutoProcessor.from_pretrained(repo_id, trust_remote_code=True)
+    # device_map (em vez de carregar no CPU e mover com .to(device)) evita o
+    # pico transitório de manter a cópia CPU e a GPU vivas ao mesmo tempo —
+    # confirmado necessário numa L4 de 23GB: sem isso, mover o
+    # audio_tokenizer pra GPU logo depois estourava CUDA OOM por ~20MB.
     model = AutoModel.from_pretrained(
-        repo_id, trust_remote_code=True, torch_dtype=torch.bfloat16, attn_implementation="sdpa"
-    ).to(device)
+        repo_id,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16,
+        attn_implementation="sdpa",
+        device_map=device,
+    )
 
     if args.lora_adapter_path:
         # Ver scripts/pod_lora_train.py pro porquê desses dois workarounds
@@ -191,6 +199,7 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
 
     # audio_tokenizer só entra na GPU depois do adapter fundido — carregar o
     # PeftModel sozinho já quase enche 24GB, confirmado na prática.
+    torch.cuda.empty_cache()
     processor.audio_tokenizer = processor.audio_tokenizer.to(device)
 
     def synthesize_once(text: str, tokens: int, reference: list[str] | None, out_path: Path):

@@ -245,22 +245,48 @@ Isso reforça um padrão desta investigação: sempre medir antes de confiar
 num "limite geralmente aceito" — o phase vocoder do librosa em fala curta
 sintética se comporta pior que a intuição de "stretch de música" sugere.
 
+**Rodada v9 real** (piso + stretch com o limite corrigido de 1.5x):
+`within_duration_tolerance_rate` = 0,375 (era 0,53 com o limite de 2.0x que
+degradava conteúdo, e 0,19 sem stretch nenhum). Quadro honesto, por faixa
+de alvo:
+- Alvo entre ~2,1s e o piso (3,2s): stretch de até 1.5x alcança o alvo
+  real E preserva conteúdo — funciona como esperado (ex.: segmentos com
+  CER baixo e duração dentro da tolerância).
+- Alvo bem abaixo de ~2,1s (a maioria dos casos problemáticos reais, tipo
+  0,4-1,1s): precisaria de mais de 1.5x de compressão pra bater o alvo
+  exato — trava no limite seguro (2,1867s = 3,2/1,5), fica mais perto mas
+  não bate, e `fora_duracao` continua sinalizando corretamente. **Esse não
+  é um bug do time-stretch** — é o time-stretch reconhecendo seu próprio
+  limite em vez de forçar um resultado ruim.
+- Pra esses mesmos casos bem curtos, o CONTEÚDO (independente de duração)
+  também segue com problema — vazio, alucinado, ou garbled. Isso é o
+  problema separado de "texto isolado sem contexto" (próxima seção),
+  não algo que o time-stretch deveria resolver.
+
 ## Próximos passos (em ordem)
 
-1. Decidir e implementar o que fazer com o excedente de duração dos
-   segmentos que bateram no piso — time-stretch de verdade (que biblioteca?
-   qualidade aceitável em que faixa de compressão?) vs. aceitar e confiar
-   no gate `fora_duracao`.
-2. Investigar o achado colateral do bookkeeping de retry (segmentos limpos
+1. ~~Decidir e implementar o que fazer com o excedente de duração~~ —
+   **feito** (`time_stretch_to_duration`, commits `abdc7d5`/`313c870`).
+   Funciona bem pra alvo entre ~2,1s e o piso; abaixo disso, trava no
+   limite seguro e deixa `fora_duracao` sinalizar — comportamento
+   pretendido, não pendência.
+2. **Atual**: "texto isolado sem contexto" (uma palavra/frase muito curta
+   solta, ex. `"decide"`, `"milagre."`). `packages/pipeline/segmentation.py`
+   já tem um mecanismo de fundir segmento curto com vizinho
+   (`_merge_short_groups`, `DEFAULT_MIN_DURATION=0.3`) — mas o piso dele
+   (0,3s) é sobre TIMING do vídeo original, não sobre o que o MOSS-TTS
+   consegue sintetizar bem; os casos problemáticos de hoje (0,4-1,5s) estão
+   todos ACIMA desse piso e passam direto como segmento isolado. Decisão
+   de arquitetura pendente (não é só engenharia): fundir segmento baseado
+   em limite de SÍNTESE, não de timing, muda o significado de "segmento"
+   pro resto do pipeline (afeta T0.5, isocronia por segmento, e o
+   invariante de "segmento é a unidade atômica" do CLAUDE.md) — não decidir
+   isso sozinho sem confirmar com o usuário.
+3. Investigar o achado colateral do bookkeeping de retry (segmentos limpos
    sendo re-sintetizados sem necessidade) — desperdício de GPU, não parece
    corromper o resultado mas vale entender.
-3. Decidir separadamente o que fazer com "texto isolado sem contexto"
-   (uma palavra solta) — pode ser um caso pra aceitar como limitação e
-   deixar pro editor manual, já que é um padrão bem mais raro que segmento
-   curto em geral.
-4. Rodar os 10 vídeos do portão de decisão do T0.12 só depois dos itens
-   acima, pra medir a taxa de correção manual de verdade — antes disso, os
-   números ainda estão inflados pelo excedente de duração (item 1).
+4. Rodar os 10 vídeos do portão de decisão do T0.12 só depois do item 2,
+   pra medir a taxa de correção manual de verdade.
 
 ## Decisão (2026-09-14, confirmada explicitamente com o usuário)
 

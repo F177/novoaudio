@@ -188,6 +188,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
     remote_job_dir = f"jobs/{cache_dir.name}"
     run_on_pod(pod, f"mkdir -p {remote_job_dir}")
     hf_env = {"HF_HOME": "/workspace/hf_cache", "HF_TOKEN": os.environ.get("HF_TOKEN", "")}
+    synth_env = {**hf_env, "MOSS_TTS_AUDIO_TOKENIZER_DEVICE": pod.audio_tokenizer_device}
     lora_flag = (
         f" --lora-adapter-path {pod.lora_adapter_path}" if pod.lora_adapter_path else ""
     )
@@ -335,7 +336,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
             f"{pod.python_tts} -m scripts.pod_worker synthesize "
             f"--input {remote_job_dir}/synth_jobs.json --out-dir {remote_job_dir}/synth"
             f"{lora_flag}",
-            env=hf_env,
+            env=synth_env,
         )
         download_from_pod(pod, f"{remote_job_dir}/synth", str(synth_dir))
 
@@ -384,7 +385,7 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
             f"{pod.python_tts} -m scripts.pod_worker synthesize "
             f"--input {remote_job_dir}/{retry_jobs_name} --out-dir {remote_job_dir}/synth"
             f"{lora_flag}",
-            env=hf_env,
+            env=synth_env,
         )
         retry_meta_name = f"synth_retry_meta_{attempt}.json"
         download_from_pod(

@@ -160,6 +160,18 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
 
     repo_id = "OpenMOSS-Team/MOSS-TTS-v1.5"
     device = "cuda"
+    # Em GPUs de ~23GB (ex.: L4) o modelo base sozinho já usa ~21-22GB —
+    # mover o audio_tokenizer pra GPU também estoura CUDA OOM por uma margem
+    # mínima (~20MB, confirmado testando: nem device_map nem
+    # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True resolvem, a folga
+    # real não existe). Com o tokenizer na CPU o modelo cabe com folga
+    # (~17GB), mas cada generate() paga um round-trip CPU↔GPU por token de
+    # áudio decodificado, o que mede ~4-8s pra segmentos de 2-6s — acima do
+    # invariante de <5s de CLAUDE.md pra ressíntese de segmento isolado.
+    # Configurável por env porque é uma característica da GPU, não do
+    # código: numa GPU com mais VRAM (A6000, A100...) "cuda" tem folga e é
+    # bem mais rápido.
+    audio_tokenizer_device = os.environ.get("MOSS_TTS_AUDIO_TOKENIZER_DEVICE", "cuda")
     language = "Portuguese"  # tende ao pt-PT sem essa tag explícita, ver docs/ptbr.md
     default_tolerance = 0.08
 
@@ -200,7 +212,7 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
     # audio_tokenizer só entra na GPU depois do adapter fundido — carregar o
     # PeftModel sozinho já quase enche 24GB, confirmado na prática.
     torch.cuda.empty_cache()
-    processor.audio_tokenizer = processor.audio_tokenizer.to(device)
+    processor.audio_tokenizer = processor.audio_tokenizer.to(audio_tokenizer_device)
 
     def synthesize_once(text: str, tokens: int, reference: list[str] | None, out_path: Path):
         message = processor.build_user_message(

@@ -44,6 +44,16 @@ Config lida de variáveis de ambiente (ver `.env.example`):
     (`scripts/pod_lora_train.py`) pra fundir nos pesos base antes de
     sintetizar. Vazio = usa o MOSS-TTS sem fine-tuning, comportamento
     original. Cópia local de cada adapter em `.cache/lora_checkpoints/`.
+
+    POD_AUDIO_TOKENIZER_DEVICE (opcional, default "cuda"): característica da
+    GPU do Pod, não do código — ver `scripts/pod_worker.py::cmd_synthesize`.
+    Numa GPU de ~23GB (L4), o MOSS-TTS base já quase enche a VRAM sozinho;
+    manter o audio_tokenizer na GPU também estoura CUDA OOM por uma margem
+    mínima (confirmado: nem device_map nem PYTORCH_CUDA_ALLOC_CONF ajudam,
+    não há folga real). "cpu" faz o modelo caber (~17GB), mas cada
+    generate() paga round-trip CPU↔GPU por token de áudio — mede uns 4-8s
+    por segmento, acima do invariante de <5s de CLAUDE.md pra ressíntese
+    isolada. Numa GPU com mais VRAM (A6000, A100...), deixe "cuda".
 """
 
 from __future__ import annotations
@@ -73,6 +83,7 @@ class PodConfig:
     ld_library_path_asr: str
     voice_reference: str
     lora_adapter_path: str | None
+    audio_tokenizer_device: str
 
     @classmethod
     def from_env(cls) -> PodConfig:
@@ -98,6 +109,7 @@ class PodConfig:
             ),
             voice_reference=os.environ.get("POD_VOICE_REFERENCE", _DEFAULT_VOICE_REFERENCE),
             lora_adapter_path=os.environ.get("POD_LORA_ADAPTER_PATH") or None,
+            audio_tokenizer_device=os.environ.get("POD_AUDIO_TOKENIZER_DEVICE", "cuda"),
         )
 
 

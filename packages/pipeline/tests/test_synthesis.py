@@ -1,12 +1,24 @@
+import numpy as np
+import pytest
+
 from packages.pipeline.segmentation import InternalPause
 from packages.pipeline.synthesis import (
+    MAX_TIME_STRETCH_RATIO,
     MIN_SYNTHESIS_TOKENS,
     adjust_tokens_for_retry,
     apply_ipa_overrides,
     duration_to_tokens,
     inject_pauses,
     is_within_tolerance,
+    time_stretch_to_duration,
 )
+
+SAMPLE_RATE = 24000
+
+
+def _tone(seconds: float, freq: float = 220.0) -> np.ndarray:
+    t = np.arange(int(seconds * SAMPLE_RATE)) / SAMPLE_RATE
+    return (0.3 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
 
 
 def test_duration_to_tokens_uses_12_5hz() -> None:
@@ -112,3 +124,40 @@ def test_adjust_tokens_for_retry_never_goes_below_moss_tts_delay_pattern_floor()
         current_tokens=100, achieved_seconds=1000.0, target_seconds=0.01
     )
     assert result == MIN_SYNTHESIS_TOKENS
+
+
+def test_time_stretch_to_duration_compresses_to_target() -> None:
+    audio = _tone(3.2)
+    stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=1.6)
+    assert len(stretched) / SAMPLE_RATE == pytest.approx(1.6, abs=0.05)
+
+
+def test_time_stretch_to_duration_stretches_to_target() -> None:
+    audio = _tone(1.0)
+    stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=1.8)
+    assert len(stretched) / SAMPLE_RATE == pytest.approx(1.8, abs=0.05)
+
+
+def test_time_stretch_to_duration_noop_when_already_close() -> None:
+    audio = _tone(2.0)
+    stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=2.0)
+    assert np.array_equal(stretched, audio)
+
+
+def test_time_stretch_to_duration_clamps_extreme_ratio() -> None:
+    # 3.2s -> 0.4s pediria 8x de compressão, muito acima do que soa
+    # reconhecível — trava em MAX_TIME_STRETCH_RATIO e chega o mais perto
+    # possível, não exatamente no alvo.
+    audio = _tone(3.2)
+    stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=0.4)
+    achieved = len(stretched) / SAMPLE_RATE
+    expected_capped = 3.2 / MAX_TIME_STRETCH_RATIO
+    assert achieved == pytest.approx(expected_capped, abs=0.05)
+    assert achieved > 0.4  # não chegou no alvo real, ficou no limite seguro
+
+
+def test_time_stretch_to_duration_respects_custom_max_ratio() -> None:
+    audio = _tone(3.2)
+    stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=0.4, max_ratio=10.0)
+    achieved = len(stretched) / SAMPLE_RATE
+    assert achieved == pytest.approx(0.4, abs=0.05)

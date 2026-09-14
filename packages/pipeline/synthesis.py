@@ -59,6 +59,9 @@ from __future__ import annotations
 
 import re
 
+import librosa
+import numpy as np
+
 from packages.pipeline.segmentation import InternalPause
 
 TOKENS_PER_SECOND = 12.5
@@ -158,3 +161,47 @@ def adjust_tokens_for_retry(
         return duration_to_tokens(target_seconds)
     seconds_per_token = achieved_seconds / current_tokens
     return max(MIN_SYNTHESIS_TOKENS, round(target_seconds / seconds_per_token))
+
+
+# Limite de compressão/estiramento que ainda soa como fala reconhecível
+# (phase vocoder, preserva pitch). Não é um número medido cientificamente
+# pra este projeto especificamente — é a faixa geralmente citada como
+# "ainda soa natural" pra voz (diferente de música, que aguenta mais).
+# Acima disso, a fala fica rápida/lenta demais pra soar bem — melhor
+# aceitar a duração fora do alvo e deixar o gate `fora_duracao` sinalizar
+# pra revisão manual do que forçar um resultado provavelmente ruim.
+MAX_TIME_STRETCH_RATIO = 2.0
+
+
+def time_stretch_to_duration(
+    audio: np.ndarray,
+    sample_rate: int,
+    target_seconds: float,
+    *,
+    max_ratio: float = MAX_TIME_STRETCH_RATIO,
+) -> np.ndarray:
+    """Comprime ou estica `audio` (phase vocoder, preserva pitch) pra chegar
+    o mais perto possível de `target_seconds`.
+
+    Existe especificamente pro piso de `MIN_SYNTHESIS_TOKENS`: um segmento
+    curto sintetizado no piso sai mais longo que o alvo real, e isso
+    comprime de volta em vez de deixar o segmento estourar a timeline (ver
+    `assembly.py` T0.16) ou tocar mais devagar que devia.
+
+    A razão de compressão/estiramento é limitada a `max_ratio` (default
+    `MAX_TIME_STRETCH_RATIO`) — acima disso a fala fica rápida/devagar
+    demais pra soar natural. Nesse caso aplica só o `max_ratio` (chega o
+    mais perto possível do alvo, não bate exato) — quem chama ainda precisa
+    checar `is_within_tolerance` depois, isso não garante bater o alvo.
+    """
+    current_seconds = len(audio) / sample_rate
+    if current_seconds <= 0 or target_seconds <= 0:
+        return audio
+
+    rate = current_seconds / target_seconds
+    if abs(rate - 1.0) < 1e-3:
+        return audio
+
+    clamped_rate = max(1.0 / max_ratio, min(max_ratio, rate))
+    stretched = librosa.effects.time_stretch(audio.astype(np.float32), rate=clamped_rate)
+    return stretched

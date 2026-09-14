@@ -141,17 +141,20 @@ def cmd_translate(args: argparse.Namespace) -> None:
 
 
 def cmd_synthesize(args: argparse.Namespace) -> None:
+    import soundfile as sf
     import torch
     import torchaudio
     from transformers import AutoModel, AutoProcessor
 
     from packages.pipeline.segmentation import InternalPause
     from packages.pipeline.synthesis import (
+        MIN_SYNTHESIS_SECONDS,
         adjust_tokens_for_retry,
         apply_ipa_overrides,
         duration_to_tokens,
         inject_pauses,
         is_within_tolerance,
+        time_stretch_to_duration,
     )
 
     torch.backends.cuda.enable_cudnn_sdp(False)
@@ -262,6 +265,22 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
             attempts = 2
 
         within_tolerance = is_within_tolerance(achieved_seconds, target_seconds, tolerance)
+        stretched = False
+
+        # T0.15b: segmento abaixo do piso do delay pattern (MIN_SYNTHESIS_
+        # SECONDS) sai sistematicamente mais longo que o alvo real, porque
+        # duration_to_tokens/adjust_tokens_for_retry nunca pedem menos que
+        # o piso (ver docstring de synthesis.py). Comprime de volta em vez
+        # de deixar sobrar pra assembly.py estourar a timeline (T0.16) ou
+        # tocar mais devagar que devia.
+        if not within_tolerance and target_seconds < MIN_SYNTHESIS_SECONDS:
+            audio, sample_rate = sf.read(str(out_path), dtype="float32")
+            audio = time_stretch_to_duration(audio, sample_rate, target_seconds)
+            sf.write(str(out_path), audio, sample_rate)
+            achieved_seconds = len(audio) / sample_rate
+            within_tolerance = is_within_tolerance(achieved_seconds, target_seconds, tolerance)
+            stretched = True
+
         meta.append(
             {
                 "id": job["id"],
@@ -269,6 +288,7 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
                 "tokens_used": tokens,
                 "attempts": attempts,
                 "within_tolerance": within_tolerance,
+                "stretched": stretched,
             }
         )
 

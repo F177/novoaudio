@@ -6,8 +6,10 @@ import pytest
 
 from packages.pipeline.assembly import (
     CLIPPING_THRESHOLD,
+    MAX_DISCARDED_SECONDS,
     TARGET_LUFS,
     TimedAudio,
+    TimelineOverflowError,
     has_clipping,
     mix_with_background,
     normalize_loudness,
@@ -25,18 +27,20 @@ def _tone(seconds: float, amplitude: float = 0.5, freq: float = 440.0) -> np.nda
 
 def test_place_segments_on_timeline_matches_total_duration() -> None:
     segments = [TimedAudio(start_seconds=0.0, audio=_tone(1.0))]
-    timeline = place_segments_on_timeline(
+    result = place_segments_on_timeline(
         segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
     )
-    assert len(timeline) == int(5.0 * SAMPLE_RATE)
+    assert len(result.timeline) == int(5.0 * SAMPLE_RATE)
+    assert result.discarded_samples == 0
 
 
 def test_place_segments_on_timeline_positions_at_correct_offset() -> None:
     tone = _tone(0.5, amplitude=0.9)
     segments = [TimedAudio(start_seconds=2.0, audio=tone)]
-    timeline = place_segments_on_timeline(
+    result = place_segments_on_timeline(
         segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
     )
+    timeline = result.timeline
 
     start = int(2.0 * SAMPLE_RATE)
     assert np.allclose(timeline[start : start + len(tone)], tone)
@@ -49,49 +53,87 @@ def test_place_segments_on_timeline_fills_gaps_with_silence() -> None:
         TimedAudio(start_seconds=0.0, audio=_tone(0.2)),
         TimedAudio(start_seconds=3.0, audio=_tone(0.2)),
     ]
-    timeline = place_segments_on_timeline(
+    result = place_segments_on_timeline(
         segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
     )
     gap_start = int(0.5 * SAMPLE_RATE)
     gap_end = int(2.5 * SAMPLE_RATE)
-    assert np.allclose(timeline[gap_start:gap_end], 0.0)
+    assert np.allclose(result.timeline[gap_start:gap_end], 0.0)
 
 
 def test_place_segments_on_timeline_truncates_beyond_total_duration() -> None:
-    segments = [TimedAudio(start_seconds=4.5, audio=_tone(2.0))]
-    timeline = place_segments_on_timeline(
+    # T0.16: estoura o fim por só 0.1s (bem abaixo do limiar de 0.5s) —
+    # ainda cabe no orçamento de "arredondamento", não deve levantar.
+    segments = [TimedAudio(start_seconds=4.9, audio=_tone(0.2))]
+    result = place_segments_on_timeline(
         segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
     )
-    assert len(timeline) == int(5.0 * SAMPLE_RATE)
+    assert len(result.timeline) == int(5.0 * SAMPLE_RATE)
+    assert result.discarded_samples == int(0.1 * SAMPLE_RATE)
 
 
 def test_place_segments_on_timeline_ignores_segment_starting_after_end() -> None:
+    # T0.16: critério de aceite explícito — um segmento que estoura o fim
+    # da timeline é REPORTADO (discarded_samples > 0), não silenciosamente
+    # ignorado. Ficando acima do limiar, levanta TimelineOverflowError.
     segments = [TimedAudio(start_seconds=10.0, audio=_tone(1.0))]
-    timeline = place_segments_on_timeline(
-        segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
+    with pytest.raises(TimelineOverflowError):
+        place_segments_on_timeline(segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE)
+
+
+def test_place_segments_on_timeline_raises_above_discard_threshold() -> None:
+    # Um segmento inteiro (1s) descartado é bug, não arredondamento.
+    segments = [TimedAudio(start_seconds=4.9, audio=_tone(1.0))]
+    with pytest.raises(TimelineOverflowError):
+        place_segments_on_timeline(segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE)
+
+
+def test_place_segments_on_timeline_allows_discard_within_custom_threshold() -> None:
+    segments = [TimedAudio(start_seconds=4.9, audio=_tone(1.0))]
+    result = place_segments_on_timeline(
+        segments,
+        total_duration_seconds=5.0,
+        sample_rate=SAMPLE_RATE,
+        max_discarded_seconds=2.0,
     )
-    assert np.allclose(timeline, 0.0)
+    assert result.discarded_samples == int(0.9 * SAMPLE_RATE)
 
 
 def test_mix_with_background_sums_signals() -> None:
     vocals = np.full(100, 0.3, dtype=np.float32)
     background = np.full(100, 0.1, dtype=np.float32)
-    mixed = mix_with_background(vocals, background)
-    assert np.allclose(mixed, 0.4)
+    result = mix_with_background(vocals, background, SAMPLE_RATE)
+    assert np.allclose(result.audio, 0.4)
+    assert result.discarded_samples == 0
 
 
 def test_mix_with_background_applies_gain() -> None:
     vocals = np.zeros(100, dtype=np.float32)
     background = np.full(100, 0.2, dtype=np.float32)
-    mixed = mix_with_background(vocals, background, background_gain=0.5)
-    assert np.allclose(mixed, 0.1)
+    result = mix_with_background(vocals, background, SAMPLE_RATE, background_gain=0.5)
+    assert np.allclose(result.audio, 0.1)
 
 
-def test_mix_with_background_handles_length_mismatch() -> None:
+def test_mix_with_background_handles_small_length_mismatch() -> None:
+    # Diferença de poucas amostras (arredondamento) — não levanta.
     vocals = np.full(100, 0.1, dtype=np.float32)
     background = np.full(80, 0.1, dtype=np.float32)
-    mixed = mix_with_background(vocals, background)
-    assert len(mixed) == 80
+    result = mix_with_background(vocals, background, SAMPLE_RATE)
+    assert len(result.audio) == 80
+    assert result.discarded_samples == 20
+
+
+def test_mix_with_background_raises_above_discard_threshold() -> None:
+    # T0.16: meio segundo (aqui, mais) de diferença entre vocais e fundo é
+    # sinal de fontes diferentes, não arredondamento — deve falhar alto.
+    vocals = np.zeros(int(3.0 * SAMPLE_RATE), dtype=np.float32)
+    background = np.zeros(int(2.0 * SAMPLE_RATE), dtype=np.float32)
+    with pytest.raises(TimelineOverflowError):
+        mix_with_background(vocals, background, SAMPLE_RATE)
+
+
+def test_mix_with_background_default_threshold_matches_module_constant() -> None:
+    assert MAX_DISCARDED_SECONDS == pytest.approx(0.5)
 
 
 def test_has_clipping_detects_over_threshold() -> None:

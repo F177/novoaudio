@@ -515,9 +515,9 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         segment_results.append(result)
 
     total_duration = _probe_duration_seconds(video_path)
-    timeline = place_segments_on_timeline(timed_segments, total_duration, SYNTH_SAMPLE_RATE)
-    mixed = mix_with_background(timeline, background_audio)
-    normalized = normalize_loudness(mixed, SYNTH_SAMPLE_RATE)
+    placement = place_segments_on_timeline(timed_segments, total_duration, SYNTH_SAMPLE_RATE)
+    mix = mix_with_background(placement.timeline, background_audio, SYNTH_SAMPLE_RATE)
+    normalized = normalize_loudness(mix.audio, SYNTH_SAMPLE_RATE)
 
     final_audio_path = cached("final_audio.wav")
     sf.write(final_audio_path, normalized, SYNTH_SAMPLE_RATE)
@@ -535,6 +535,10 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         "output": str(out_path),
         "segments": segment_results,
         "stage_success": build_stage_report(segment_results),
+        "assembly": {
+            "timeline_discarded_samples": placement.discarded_samples,
+            "mix_discarded_samples": mix.discarded_samples,
+        },
     }
     (cache_dir / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"

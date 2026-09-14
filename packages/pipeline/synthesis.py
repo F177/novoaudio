@@ -164,13 +164,16 @@ def adjust_tokens_for_retry(
 
 
 # Limite de compressão/estiramento que ainda soa como fala reconhecível
-# (phase vocoder, preserva pitch). Não é um número medido cientificamente
-# pra este projeto especificamente — é a faixa geralmente citada como
-# "ainda soa natural" pra voz (diferente de música, que aguenta mais).
+# (phase vocoder do librosa, preserva pitch). MEDIDO, não só citado: um
+# áudio conhecido bom ("Ele precisa, decide agora.", transcrito perfeito
+# sem stretch) virou "Ele precisa desse de agora..." em 2.0x — ilegível.
+# Testando 1.2/1.3/1.5/1.7x no mesmo áudio, só 1.5x manteve o conteúdo
+# correto e sem repetição real. Não é um estudo rigoroso (n=1 caso, poucos
+# valores testados) — é o piso de segurança real que temos por enquanto.
 # Acima disso, a fala fica rápida/lenta demais pra soar bem — melhor
 # aceitar a duração fora do alvo e deixar o gate `fora_duracao` sinalizar
-# pra revisão manual do que forçar um resultado provavelmente ruim.
-MAX_TIME_STRETCH_RATIO = 2.0
+# pra revisão manual do que forçar um resultado provavelmente ilegível.
+MAX_TIME_STRETCH_RATIO = 1.5
 
 
 def time_stretch_to_duration(

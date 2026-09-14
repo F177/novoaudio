@@ -217,6 +217,34 @@ Vale investigar separadamente se sobrar tempo.
   `dub.py` fazendo segmentos já limpos serem re-sintetizados à toa (ver
   seção acima).
 
+### 2026-09-14 (continuação) — time-stretch implementado, e uma correção real no limite
+
+Implementado `time_stretch_to_duration` (`packages/pipeline/synthesis.py`,
+commit `abdc7d5`) usando `librosa.effects.time_stretch` (phase vocoder,
+preserva pitch — nova dependência do projeto). Limite inicial de
+`MAX_TIME_STRETCH_RATIO=2.0` foi copiado de uma referência genérica ("faixa
+geralmente citada como natural pra voz"), sem medir pra este caso
+específico.
+
+**Rodada v8 real** (piso de tokens + stretch): `within_duration_tolerance_rate`
+subiu de 0,19 (v7, sem stretch) pra **0,53** — quase triplicou. Mas ao
+conferir o CONTEÚDO pós-stretch, vários segmentos vieram vazios/estranhos
+no Whisper que antes (sem stretch) provavelmente estariam ok.
+
+**Teste de controle isolado**: peguei um áudio já confirmado limpo
+("Ele precisa, decide agora.", transcrito perfeito) e apliquei SÓ o
+stretch, sem re-sintetizar nada. Em 2.0x (o limite que eu tinha posto)
+virou "Ele precisa desse de agora... desci-de agoram" — ilegível.
+Testando 1.2/1.3/1.5/1.7x no mesmo áudio, só **1.5x** manteve o conteúdo
+correto e sem repetição real (`"Ele precisa, ele decide agora."`) — 1.7x e
+2.0x já degradam. **`MAX_TIME_STRETCH_RATIO` corrigido pra 1.5** (commit
+seguinte) — o número antigo era chute de referência genérica, esse é
+medido, mesmo que num teste pequeno (n=1 caso, poucos valores).
+
+Isso reforça um padrão desta investigação: sempre medir antes de confiar
+num "limite geralmente aceito" — o phase vocoder do librosa em fala curta
+sintética se comporta pior que a intuição de "stretch de música" sugere.
+
 ## Próximos passos (em ordem)
 
 1. Decidir e implementar o que fazer com o excedente de duração dos

@@ -128,14 +128,14 @@ def test_adjust_tokens_for_retry_never_goes_below_moss_tts_delay_pattern_floor()
 
 def test_time_stretch_to_duration_compresses_to_target() -> None:
     audio = _tone(3.2)
-    stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=1.6)
-    assert len(stretched) / SAMPLE_RATE == pytest.approx(1.6, abs=0.05)
+    stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=2.4)
+    assert len(stretched) / SAMPLE_RATE == pytest.approx(2.4, abs=0.05)
 
 
 def test_time_stretch_to_duration_stretches_to_target() -> None:
     audio = _tone(1.0)
-    stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=1.8)
-    assert len(stretched) / SAMPLE_RATE == pytest.approx(1.8, abs=0.05)
+    stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=1.4)
+    assert len(stretched) / SAMPLE_RATE == pytest.approx(1.4, abs=0.05)
 
 
 def test_time_stretch_to_duration_noop_when_already_close() -> None:

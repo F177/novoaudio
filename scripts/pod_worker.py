@@ -238,25 +238,42 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
     torch.cuda.empty_cache()
     processor.audio_tokenizer = processor.audio_tokenizer.to(audio_tokenizer_device)
 
-    def synthesize_once(text: str, tokens: int, reference: list[str] | None, out_path: Path):
+    # T0.14b — achado real (2026-09-15): gerar N amostras independentes da
+    # MESMA frase numa única chamada em lote custa quase o mesmo tempo de
+    # GPU que gerar 1 (confirmado: 3 amostras em 3,52s, 1 amostra sozinha
+    # já levava 2-4s) — a instabilidade estocástica do MOSS-TTS (repetição/
+    # alucinação) é melhor endereçada tendo várias tentativas PARALELAS
+    # pra escolher a melhor depois (`scripts/dub.py::pick_best_synthesis`)
+    # do que retentando em rodadas seriais inteiras (processo novo no Pod +
+    # round-trip de avaliação por rodada — isso sim é caro, era o gargalo
+    # real, não a geração em si). Substitui o retry por rodada do T0.12.
+    N_CANDIDATES = 3
+
+    def synthesize_batch(
+        text: str, tokens: int, reference: list[str] | None, out_dir: Path, job_id: str
+    ) -> list[tuple[Path, float]]:
         message = processor.build_user_message(
             text=text, language=language, tokens=tokens, reference=reference
         )
-        batch = processor([[message]], mode="generation")
+        batch = processor([[message]] * N_CANDIDATES, mode="generation")
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
         outputs = model.generate(
             input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=4096
         )
 
-        achieved_seconds = 0.0
-        for decoded in processor.decode(outputs):
+        sr = processor.model_config.sampling_rate
+        results = []
+        for i, decoded in enumerate(processor.decode(outputs)):
             audio = decoded.audio_codes_list[0]
-            sr = processor.model_config.sampling_rate
-            torchaudio.save(str(out_path), audio.unsqueeze(0), sr)
-            achieved_seconds = audio.shape[-1] / sr
-            break
-        return achieved_seconds
+            cand_path = out_dir / f"{job_id}_cand{i}.wav"
+            torchaudio.save(str(cand_path), audio.unsqueeze(0), sr)
+            results.append((cand_path, audio.shape[-1] / sr))
+        return results
+
+    def median_seconds(candidates: list[tuple[Path, float]]) -> float:
+        seconds = sorted(secs for _, secs in candidates)
+        return seconds[len(seconds) // 2] if seconds else 0.0
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -274,38 +291,48 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
 
         reference = [job["reference_audio_path"]] if job.get("reference_audio_path") else None
         target_seconds = job["target_seconds"]
-        out_path = out_dir / f"{job['id']}.wav"
 
         tokens = duration_to_tokens(target_seconds)
-        achieved_seconds = synthesize_once(text, tokens, reference, out_path)
+        candidates = synthesize_batch(text, tokens, reference, out_dir, job["id"])
         attempts = 1
 
-        if not is_within_tolerance(achieved_seconds, target_seconds, tolerance):
-            tokens = adjust_tokens_for_retry(tokens, achieved_seconds, target_seconds)
-            achieved_seconds = synthesize_once(text, tokens, reference, out_path)
+        if not is_within_tolerance(median_seconds(candidates), target_seconds, tolerance):
+            tokens = adjust_tokens_for_retry(tokens, median_seconds(candidates), target_seconds)
+            candidates = synthesize_batch(text, tokens, reference, out_dir, job["id"])
             attempts = 2
 
-        within_tolerance = is_within_tolerance(achieved_seconds, target_seconds, tolerance)
+        within_tolerance = is_within_tolerance(
+            median_seconds(candidates), target_seconds, tolerance
+        )
         stretched = False
 
         # T0.15b: segmento abaixo do piso do delay pattern (MIN_SYNTHESIS_
         # SECONDS) sai sistematicamente mais longo que o alvo real, porque
         # duration_to_tokens/adjust_tokens_for_retry nunca pedem menos que
-        # o piso (ver docstring de synthesis.py). Comprime de volta em vez
-        # de deixar sobrar pra assembly.py estourar a timeline (T0.16) ou
-        # tocar mais devagar que devia.
+        # o piso (ver docstring de synthesis.py). Comprime cada candidato de
+        # volta em vez de deixar sobrar pra assembly.py estourar a timeline
+        # (T0.16) ou tocar mais devagar que devia.
         if not within_tolerance and target_seconds < MIN_SYNTHESIS_SECONDS:
-            audio, sample_rate = sf.read(str(out_path), dtype="float32")
-            audio = time_stretch_to_duration(audio, sample_rate, target_seconds)
-            sf.write(str(out_path), audio, sample_rate)
-            achieved_seconds = len(audio) / sample_rate
-            within_tolerance = is_within_tolerance(achieved_seconds, target_seconds, tolerance)
+            stretched_candidates = []
+            for cand_path, _secs in candidates:
+                audio, sample_rate = sf.read(str(cand_path), dtype="float32")
+                audio = time_stretch_to_duration(audio, sample_rate, target_seconds)
+                sf.write(str(cand_path), audio, sample_rate)
+                stretched_candidates.append((cand_path, len(audio) / sample_rate))
+            candidates = stretched_candidates
+            within_tolerance = is_within_tolerance(
+                median_seconds(candidates), target_seconds, tolerance
+            )
             stretched = True
 
         meta.append(
             {
                 "id": job["id"],
-                "achieved_seconds": achieved_seconds,
+                "candidates": [
+                    {"path": cand_path.name, "achieved_seconds": secs}
+                    for cand_path, secs in candidates
+                ],
+                "achieved_seconds": median_seconds(candidates),
                 "tokens_used": tokens,
                 "attempts": attempts,
                 "within_tolerance": within_tolerance,

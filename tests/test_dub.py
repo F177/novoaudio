@@ -1,4 +1,9 @@
-from scripts.dub import _is_bad_synthesis, build_stage_report, words_from_whisperx_transcript
+from scripts.dub import (
+    _is_bad_synthesis,
+    build_stage_report,
+    pick_best_synthesis,
+    words_from_whisperx_transcript,
+)
 
 
 def test_words_from_whisperx_transcript_flattens_and_orders_by_time() -> None:
@@ -97,3 +102,31 @@ def test_is_bad_synthesis_false_for_clean_match() -> None:
     reference = "Eles tinham força pra cima de todos nós juntos."
     hypothesis = "Eles tinham força pra cima de todos nós juntos."
     assert _is_bad_synthesis(reference, hypothesis) is False
+
+
+def test_pick_best_synthesis_picks_first_clean_candidate() -> None:
+    reference = "se não ficarmos juntos"
+    hypotheses = [
+        "Se não ficarmos juntos, se não ficarmo juntos.",  # repetido
+        "Se não ficarmos juntos,",  # limpo
+        "Se não ficarmos juntos, juntos,",  # repetido
+    ]
+    assert pick_best_synthesis(reference, hypotheses) == 1
+
+
+def test_pick_best_synthesis_falls_back_to_lowest_cer_when_all_bad() -> None:
+    reference = "Eles tinham força pra cima de todos nós juntos."
+    hypotheses = [
+        "",  # CER 1.0, o pior
+        "Eles tinham força pra cima de todos nós juntos e mais um pouco de coisa aleatória.",
+    ]
+    # o segundo tem CER > 0 mas bem menor que o primeiro (vazio == CER 1.0)
+    assert pick_best_synthesis(reference, hypotheses) == 1
+
+
+def test_pick_best_synthesis_empty_hypotheses_returns_zero() -> None:
+    assert pick_best_synthesis("qualquer coisa", []) == 0
+
+
+def test_pick_best_synthesis_single_candidate() -> None:
+    assert pick_best_synthesis("oi", ["oi"]) == 0

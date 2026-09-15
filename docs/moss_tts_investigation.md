@@ -263,30 +263,48 @@ de alvo:
   problema separado de "texto isolado sem contexto" (próxima seção),
   não algo que o time-stretch deveria resolver.
 
+### 2026-09-14 (continuação) — fusão por poucas palavras, resultado real (v10)
+
+Usuário confirmou explicitamente: fundir segmento com o vizinho quando tem
+poucas palavras, mesmo que dure mais que o piso de 0,3s de
+`min_duration`. Implementado em `packages/pipeline/segmentation.py`
+(commit `76fb531`): `_merge_short_groups` agora funde também por
+`min_word_count` (default 4), reusando o mesmo mecanismo (e o mesmo
+tratamento de pausa interna) já usado pra fusão por duração curta.
+
+**Rodada v10 real** (piso de tokens + stretch + fusão por poucas
+palavras, tudo junto): 16 segmentos originais viraram **11** (fusão
+funcionando — nenhum ficou com menos de 5 palavras). Resultado, primeira
+tentativa de síntese, sem contar retry:
+- `within_duration_tolerance_rate` = **0,818** (era 0,375 sem a fusão —
+  mais que dobrou)
+- `segments_needing_synth_retry_rate` = **0,455** (era 0,8125)
+- `segments_with_any_flag_rate` = **0,818** (era 1,0)
+- **7 de 11 segmentos (63,6%) saíram limpos** (CER baixo, sem repetição,
+  sem truncamento) já na primeira tentativa — melhor número desta
+  investigação inteira (era 43,75% no melhor resultado anterior, v7).
+
+Os 4 restantes ainda têm problema real (2 vazios, 1 garbled, 1 truncado) —
+mas são uma fração muito menor do total, e continuam entrando no loop de
+retry já existente (T0.14) pra segunda/terceira tentativa.
+
+**Combinando os três fixes de hoje** (piso de tokens, time-stretch, fusão
+por poucas palavras) — nenhum exigiu tocar no código de geração do
+MOSS-TTS. A causa raiz real estava em como o NOSSO pipeline decidia
+quanto tempo pedir e como segmentava o texto antes de mandar pro modelo,
+não na arquitetura do modelo em si.
+
 ## Próximos passos (em ordem)
 
-1. ~~Decidir e implementar o que fazer com o excedente de duração~~ —
-   **feito** (`time_stretch_to_duration`, commits `abdc7d5`/`313c870`).
-   Funciona bem pra alvo entre ~2,1s e o piso; abaixo disso, trava no
-   limite seguro e deixa `fora_duracao` sinalizar — comportamento
-   pretendido, não pendência.
-2. **Atual**: "texto isolado sem contexto" (uma palavra/frase muito curta
-   solta, ex. `"decide"`, `"milagre."`). `packages/pipeline/segmentation.py`
-   já tem um mecanismo de fundir segmento curto com vizinho
-   (`_merge_short_groups`, `DEFAULT_MIN_DURATION=0.3`) — mas o piso dele
-   (0,3s) é sobre TIMING do vídeo original, não sobre o que o MOSS-TTS
-   consegue sintetizar bem; os casos problemáticos de hoje (0,4-1,5s) estão
-   todos ACIMA desse piso e passam direto como segmento isolado. Decisão
-   de arquitetura pendente (não é só engenharia): fundir segmento baseado
-   em limite de SÍNTESE, não de timing, muda o significado de "segmento"
-   pro resto do pipeline (afeta T0.5, isocronia por segmento, e o
-   invariante de "segmento é a unidade atômica" do CLAUDE.md) — não decidir
-   isso sozinho sem confirmar com o usuário.
+1. ~~Excedente de duração~~ — **feito** (`time_stretch_to_duration`).
+2. ~~Texto isolado sem contexto~~ — **feito** (fusão por `min_word_count`,
+   confirmado com o usuário, resultado real medido acima).
 3. Investigar o achado colateral do bookkeeping de retry (segmentos limpos
    sendo re-sintetizados sem necessidade) — desperdício de GPU, não parece
    corromper o resultado mas vale entender.
-4. Rodar os 10 vídeos do portão de decisão do T0.12 só depois do item 2,
-   pra medir a taxa de correção manual de verdade.
+4. Rodar os 10 vídeos do portão de decisão do T0.12 pra medir a taxa de
+   correção manual de verdade com os três fixes juntos — a validação real
+   que faltava antes de considerar essa fase do pipeline pronta.
 
 ## Decisão (2026-09-14, confirmada explicitamente com o usuário)
 

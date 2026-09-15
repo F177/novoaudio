@@ -182,7 +182,14 @@ def _resample(in_path: Path, out_path: Path, sample_rate: int) -> None:
     _run(["ffmpeg", "-y", "-i", str(in_path), "-ar", str(sample_rate), "-ac", "1", str(out_path)])
 
 
-def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool) -> dict[str, Any]:
+def run_pipeline(
+    video_path: Path,
+    out_path: Path,
+    cache_dir: Path,
+    force: bool,
+    *,
+    vocals_only: bool = False,
+) -> dict[str, Any]:
     cache_dir.mkdir(parents=True, exist_ok=True)
     pod = PodConfig.from_env()
     remote_job_dir = f"jobs/{cache_dir.name}"
@@ -517,8 +524,17 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
 
     total_duration = _probe_duration_seconds(video_path)
     placement = place_segments_on_timeline(timed_segments, total_duration, SYNTH_SAMPLE_RATE)
-    mix = mix_with_background(placement.timeline, background_audio, SYNTH_SAMPLE_RATE)
-    normalized = normalize_loudness(mix.audio, SYNTH_SAMPLE_RATE)
+    if vocals_only:
+        # --vocals-only (T0.12, pedido pontual pra avaliar a voz sem o fundo
+        # original atrapalhando) — comportamento padrão do produto continua
+        # remixando com o fundo (ver mix_with_background abaixo).
+        mixed_audio = placement.timeline
+        mix_discarded_samples = 0
+    else:
+        mix = mix_with_background(placement.timeline, background_audio, SYNTH_SAMPLE_RATE)
+        mixed_audio = mix.audio
+        mix_discarded_samples = mix.discarded_samples
+    normalized = normalize_loudness(mixed_audio, SYNTH_SAMPLE_RATE)
 
     final_audio_path = cached("final_audio.wav")
     sf.write(final_audio_path, normalized, SYNTH_SAMPLE_RATE)
@@ -538,7 +554,8 @@ def run_pipeline(video_path: Path, out_path: Path, cache_dir: Path, force: bool)
         "stage_success": build_stage_report(segment_results),
         "assembly": {
             "timeline_discarded_samples": placement.discarded_samples,
-            "mix_discarded_samples": mix.discarded_samples,
+            "mix_discarded_samples": mix_discarded_samples,
+            "vocals_only": vocals_only,
         },
     }
     (cache_dir / "report.json").write_text(
@@ -556,6 +573,14 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--vocals-only",
+        action="store_true",
+        help=(
+            "não remixa com o fundo original — só a voz dublada (uso pontual pra "
+            "avaliação, não é o comportamento padrão do produto)"
+        ),
+    )
     args = parser.parse_args()
 
     if not args.video and not args.r2_key:
@@ -575,7 +600,7 @@ def main() -> None:
 
     out_path = args.out or video_path.with_name(f"{video_path.stem}.dub{video_path.suffix}")
 
-    report = run_pipeline(video_path, out_path, cache_dir, args.force)
+    report = run_pipeline(video_path, out_path, cache_dir, args.force, vocals_only=args.vocals_only)
     print(json.dumps(report["stage_success"], indent=2, ensure_ascii=False))
     print(f"saída: {report['output']}")
     print(f"relatório completo: {cache_dir / 'report.json'}")

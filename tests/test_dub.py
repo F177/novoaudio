@@ -1,7 +1,10 @@
+import json
+
 from scripts.dub import (
     _is_bad_synthesis,
     build_stage_report,
     pick_best_synthesis,
+    save_transcript_and_translation,
     words_from_whisperx_transcript,
 )
 
@@ -130,3 +133,52 @@ def test_pick_best_synthesis_empty_hypotheses_returns_zero() -> None:
 
 def test_pick_best_synthesis_single_candidate() -> None:
     assert pick_best_synthesis("oi", ["oi"]) == 0
+
+
+def test_save_transcript_and_translation_writes_both_files(tmp_path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / "transcript.json").write_text(
+        json.dumps({"segments": [{"text": "hello"}]}), encoding="utf-8"
+    )
+    report = {
+        "segments": [
+            {
+                "id": "seg0000",
+                "t_inicio": 0.0,
+                "t_fim": 1.5,
+                "texto_original": "Hello world",
+                "traducao": "Olá mundo",
+            }
+        ]
+    }
+    out_path = tmp_path / "video.dub.mp4"
+
+    transcript_path, translation_path = save_transcript_and_translation(report, cache_dir, out_path)
+
+    assert transcript_path.name == "video.dub_transcript.json"
+    assert json.loads(transcript_path.read_text(encoding="utf-8")) == {
+        "segments": [{"text": "hello"}]
+    }
+    assert translation_path.name == "video.dub_traducao.json"
+    rows = json.loads(translation_path.read_text(encoding="utf-8"))
+    assert rows == [
+        {
+            "id": "seg0000",
+            "t_inicio": 0.0,
+            "t_fim": 1.5,
+            "texto_original": "Hello world",
+            "traducao_usada": "Olá mundo",
+        }
+    ]
+
+
+def test_save_transcript_and_translation_skips_missing_transcript(tmp_path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    report = {"segments": []}
+    out_path = tmp_path / "video.dub.mp4"
+
+    transcript_path, _ = save_transcript_and_translation(report, cache_dir, out_path)
+
+    assert not transcript_path.exists()

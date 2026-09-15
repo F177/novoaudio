@@ -215,6 +215,38 @@ def _resample(in_path: Path, out_path: Path, sample_rate: int) -> None:
     _run(["ffmpeg", "-y", "-i", str(in_path), "-ar", str(sample_rate), "-ac", "1", str(out_path)])
 
 
+def save_transcript_and_translation(
+    report: dict[str, Any], cache_dir: Path, out_path: Path
+) -> tuple[Path, Path]:
+    """Salva o transcript original (WhisperX) e a tradução REALMENTE usada
+    na síntese (não os 5 candidatos — só o escolhido, por segmento) ao lado
+    do vídeo de saída, pra inspeção sem precisar abrir `--cache-dir`.
+
+    Devolve os dois caminhos escritos (transcript, tradução), mesmo que o
+    transcript não exista (ex.: reused de um cache antigo sem essa etapa).
+    """
+    transcript_dest = out_path.with_name(f"{out_path.stem}_transcript.json")
+    transcript_src = cache_dir / "transcript.json"
+    if transcript_src.exists():
+        transcript_dest.write_bytes(transcript_src.read_bytes())
+
+    translation_rows = [
+        {
+            "id": s["id"],
+            "t_inicio": s["t_inicio"],
+            "t_fim": s["t_fim"],
+            "texto_original": s.get("texto_original"),
+            "traducao_usada": s.get("traducao"),
+        }
+        for s in report["segments"]
+    ]
+    translation_dest = out_path.with_name(f"{out_path.stem}_traducao.json")
+    translation_dest.write_text(
+        json.dumps(translation_rows, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return transcript_dest, translation_dest
+
+
 def run_pipeline(
     video_path: Path,
     out_path: Path,
@@ -593,9 +625,14 @@ def main() -> None:
     out_path = args.out or video_path.with_name(f"{video_path.stem}.dub{video_path.suffix}")
 
     report = run_pipeline(video_path, out_path, cache_dir, args.force, vocals_only=args.vocals_only)
+    transcript_path, translation_path = save_transcript_and_translation(
+        report, cache_dir, Path(report["output"])
+    )
     print(json.dumps(report["stage_success"], indent=2, ensure_ascii=False))
     print(f"saída: {report['output']}")
     print(f"relatório completo: {cache_dir / 'report.json'}")
+    print(f"transcript: {transcript_path}")
+    print(f"tradução usada: {translation_path}")
 
 
 if __name__ == "__main__":

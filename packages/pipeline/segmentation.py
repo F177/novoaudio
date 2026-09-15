@@ -23,6 +23,15 @@ um vizinho (a pausa real que os isolava não desaparece — vira uma pausa
 interna, possivelmente longa, dentro do segmento fundido). Isso é o que
 garante o "nenhum segmento <0,3s" do critério de aceite mesmo quando uma
 interjeição curta fica isolada por âncoras duras dos dois lados.
+
+Segmentos com poucas palavras (`min_word_count`) são fundidos do mesmo
+jeito, mesmo quando já duram mais que `min_duration` — achado real da
+investigação de qualidade do MOSS-TTS (`docs/moss_tts_investigation.md`):
+uma frase/palavra isolada sem contexto ao redor falha na síntese mesmo com
+orçamento de tempo grande (testado até 8s pra uma palavra só, sem
+melhorar) — o problema é a falta de CONTEXTO linguístico, não de tempo.
+Fundir aqui, antes da tradução, garante que o texto traduzido carrega mais
+conteúdo real, em vez de só esticar o áudio de uma palavra isolada.
 """
 
 from __future__ import annotations
@@ -33,6 +42,7 @@ DEFAULT_WEAK_PAUSE_MIN = 0.12
 DEFAULT_HARD_PAUSE_MIN = 0.35
 DEFAULT_MAX_DURATION = 12.0
 DEFAULT_MIN_DURATION = 0.3
+DEFAULT_MIN_WORD_COUNT = 4
 
 
 @dataclass
@@ -68,12 +78,15 @@ def segment_words(
     hard_pause_min: float = DEFAULT_HARD_PAUSE_MIN,
     max_duration: float = DEFAULT_MAX_DURATION,
     min_duration: float = DEFAULT_MIN_DURATION,
+    min_word_count: int = DEFAULT_MIN_WORD_COUNT,
 ) -> list[Segment]:
     if not words:
         return []
 
     groups = _break_into_groups(words, hard_pause_min=hard_pause_min, max_duration=max_duration)
-    groups = _merge_short_groups(groups, min_duration=min_duration, max_duration=max_duration)
+    groups = _merge_short_groups(
+        groups, min_duration=min_duration, max_duration=max_duration, min_word_count=min_word_count
+    )
     groups = _mark_weak_pauses(groups, weak_pause_min=weak_pause_min)
 
     return [
@@ -111,17 +124,20 @@ def _break_into_groups(
 
 
 def _merge_short_groups(
-    groups: list[list[Word]], *, min_duration: float, max_duration: float
+    groups: list[list[Word]], *, min_duration: float, max_duration: float, min_word_count: int = 1
 ) -> list[list[Word]]:
     def duration(group: list[Word]) -> float:
         return group[-1].end - group[0].start
+
+    def is_too_short(group: list[Word]) -> bool:
+        return duration(group) < min_duration or len(group) < min_word_count
 
     merged = list(groups)
     changed = True
     while changed and len(merged) > 1:
         changed = False
         for i, group in enumerate(merged):
-            if duration(group) >= min_duration:
+            if not is_too_short(group):
                 continue
             if i + 1 < len(merged) and duration(group + merged[i + 1]) <= max_duration:
                 merged[i : i + 2] = [group + merged[i + 1]]

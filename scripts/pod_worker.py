@@ -104,6 +104,15 @@ def cmd_translate(args: argparse.Namespace) -> None:
         model_id, torch_dtype=torch.bfloat16, device_map=device
     )
 
+    # Qwen às vezes não devolve JSON válido (achado real, 2x em bateladas de
+    # 90+ segmentos) — sem retry, 1 job ruim derrubava a tradução inteira do
+    # vídeo, mesmo com todos os outros já traduzidos certo. Reamostra (a
+    # geração é `do_sample=True`, então tentar de novo é uma chance real de
+    # sucesso, não repetir o mesmo erro) até MAX_TRANSLATE_ATTEMPTS; se nunca
+    # conseguir, esse UM segmento fica sem candidatos (dub.py cai pro texto
+    # original em inglês) em vez de travar os outros 89.
+    MAX_TRANSLATE_ATTEMPTS = 3
+
     jobs = json.loads(Path(args.input).read_text(encoding="utf-8"))
     results = []
     for job in jobs:
@@ -114,13 +123,25 @@ def cmd_translate(args: argparse.Namespace) -> None:
         messages = [{"role": "user", "content": prompt}]
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = tokenizer([text], return_tensors="pt").to(device)
-        outputs = model.generate(**inputs, max_new_tokens=1024, do_sample=True, temperature=0.7)
-        response = tokenizer.decode(
-            outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
-        )
 
-        candidates = parse_candidates(response)
-        ranked = rank_candidates(candidates, job["target_syllables"])
+        candidates: list[str] = []
+        for attempt in range(1, MAX_TRANSLATE_ATTEMPTS + 1):
+            outputs = model.generate(
+                **inputs, max_new_tokens=1024, do_sample=True, temperature=0.7
+            )
+            response = tokenizer.decode(
+                outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
+            )
+            try:
+                candidates = parse_candidates(response)
+                break
+            except ValueError as exc:
+                print(
+                    f"[translate] job {job['id']}: tentativa {attempt}/"
+                    f"{MAX_TRANSLATE_ATTEMPTS} falhou ({exc})"
+                )
+
+        ranked = rank_candidates(candidates, job["target_syllables"]) if candidates else []
         results.append(
             {
                 "id": job["id"],

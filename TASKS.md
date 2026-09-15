@@ -65,6 +65,24 @@ Gere ~300 frases pt-BR de comprimentos variados, sintetize, meça a duração re
 `scripts/dub.py`. Um comando: vídeo entra, vídeo dublado sai, com relatório JSON de segmentos e flags. Cacheia resultados intermediários em disco.
 **Aceite:** roda em 10 vídeos reais de YouTube. Relatório com taxa de sucesso por etapa.
 
+T0.13 — CER confiável 🤝
+
+packages/pipeline/quality.py. character_error_rate hoje compara texto cru contra saída do Whisper: pontuação, caixa e dígitos vs. números por extenso inflam o CER antes de existir erro real. Normalize os dois lados antes de medir — minúsculas, sem pontuação, espaços colapsados, passando por packages/ptbr/normalize.py para que "2026" e "dois mil e vinte e seis" comparem iguais. Mantenha a função pura e determinística. Aceite: testes cobrindo cada classe de normalização; piso de CER medido em 20 segmentos bons conhecidos e documentado no docstring; CER_THRESHOLD redefinido em relação a esse piso, com a justificativa escrita.
+
+Ask for the tests before the implementation here — it's a pure module and that's your own rule.
+
+T0.14 — Flag de truncamento 🤖
+
+packages/pipeline/quality.py. Truncamento é invisível para fora_duracao por construção: o MOSS-TTS corta o texto justamente para caber na duração pedida, então o segmento truncado bate o alvo. Detecção tem que ser lexical. Adicione truncado(reference, hypothesis) — razão de palavras e cobertura do trecho final da referência na hipótese — e inclua em QualityFlags. Em scripts/dub.py, troque o predicado _is_bad_synthesis: hoje é has_repetition or CER >= 1.0, o que só pega falha catastrófica; passe a usar has_repetition or truncado or cer_alto(cer). Aceite: teste com caso positivo e negativo para truncado, incluindo referência curta (<4 palavras) que não deve disparar. Teste de que o predicado de retry dispara em CER intermediário.
+
+T0.15 — Corrigir o termo de pausa no orçamento 🤝
+
+packages/pipeline/budget.py + recalibração. O coeficiente c=5.6865 de calibration.json foi ajustado em geração livre (max_new_tokens=4096, ver scripts/calibration_measure_durations.py), mas é aplicado em regime de orçamento fechado, onde o achado do T0.9 diz que a pausa cabe dentro do orçamento. Efeito: syllables_that_fit(4.0s, pause_seconds=1.0) devolve 0 sílabas. Refaça o ajuste sem o termo de pausa e com pausa como contagem em vez de segundos; compare R² nas três variantes. Aceite: R² documentado nas três; variante escolhida com justificativa escrita em known_issues; teste que trava o comportamento contra números esperados de verdade, não só a consistência ida-e-volta do teste atual (que passa com qualquer c, porque usa o mesmo coeficiente dos dois lados).
+
+T0.16 — Contabilizar cortes na montagem 🤖
+
+packages/pipeline/assembly.py. place_segments_on_timeline e mix_with_background cortam em silêncio (min(...) nos dois). Devolva quantas amostras foram descartadas e falhe acima de um limiar — algumas amostras é arredondamento, meio segundo é bug. Aceite: teste que um segmento estourando o fim da timeline é reportado, não silenciosamente cortado.
+
 ### 🚦 Portão de decisão
 Rode nos 10 vídeos. **Se mais de 30% dos segmentos precisam de correção manual, pare e conserte o pipeline antes de tocar em produto.** Não construa web em cima de um pipeline que não funciona.
 

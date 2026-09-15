@@ -139,7 +139,8 @@ def test_save_transcript_and_translation_writes_both_files(tmp_path) -> None:
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
     (cache_dir / "transcript.json").write_text(
-        json.dumps({"segments": [{"text": "hello"}]}), encoding="utf-8"
+        json.dumps({"segments": [{"start": 0.0, "end": 1.5, "text": " hello ", "words": []}]}),
+        encoding="utf-8",
     )
     report = {
         "segments": [
@@ -157,9 +158,12 @@ def test_save_transcript_and_translation_writes_both_files(tmp_path) -> None:
     transcript_path, translation_path = save_transcript_and_translation(report, cache_dir, out_path)
 
     assert transcript_path.name == "video.dub_transcript.json"
-    assert json.loads(transcript_path.read_text(encoding="utf-8")) == {
-        "segments": [{"text": "hello"}]
-    }
+    # simplificado (T0.12b: sem detalhe por palavra, indentado) e sem
+    # espaços de sobra no texto (WhisperX costuma prefixar com um espaço)
+    assert json.loads(transcript_path.read_text(encoding="utf-8")) == [
+        {"start": 0.0, "end": 1.5, "text": "hello"}
+    ]
+    assert "\n" in transcript_path.read_text(encoding="utf-8")  # indentado, não numa linha só
     assert translation_path.name == "video.dub_traducao.json"
     rows = json.loads(translation_path.read_text(encoding="utf-8"))
     assert rows == [

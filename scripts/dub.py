@@ -222,13 +222,26 @@ def save_transcript_and_translation(
     na síntese (não os 5 candidatos — só o escolhido, por segmento) ao lado
     do vídeo de saída, pra inspeção sem precisar abrir `--cache-dir`.
 
+    O transcript salvo aqui é simplificado (`start, end, text` por
+    segmento) — o WhisperX bruto em `--cache-dir/transcript.json` vem numa
+    linha só e com o detalhe por palavra (score, speaker), que é ruído pra
+    quem só quer conferir o que foi dito. Indentado (`indent=2`) pelos
+    mesmos motivos.
+
     Devolve os dois caminhos escritos (transcript, tradução), mesmo que o
     transcript não exista (ex.: reused de um cache antigo sem essa etapa).
     """
     transcript_dest = out_path.with_name(f"{out_path.stem}_transcript.json")
     transcript_src = cache_dir / "transcript.json"
     if transcript_src.exists():
-        transcript_dest.write_bytes(transcript_src.read_bytes())
+        raw_transcript = json.loads(transcript_src.read_text(encoding="utf-8"))
+        simplified = [
+            {"start": seg["start"], "end": seg["end"], "text": seg["text"].strip()}
+            for seg in raw_transcript.get("segments", [])
+        ]
+        transcript_dest.write_text(
+            json.dumps(simplified, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
     translation_rows = [
         {

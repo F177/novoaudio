@@ -136,6 +136,31 @@ def apply_ipa_overrides(text: str, glossary: dict[str, str]) -> str:
     return result
 
 
+def infer_delivery_instruction(text: str) -> str | None:
+    """Deriva uma instrução de estilo de fala pro MOSS-TTS a partir da
+    pontuação do texto já traduzido (`instruction` de
+    `processor.build_user_message` — controla tom/emoção/ritmo, separado
+    do texto a falar).
+
+    Mesma lógica de `packages/pipeline/translation.py::_expressiveness_score`:
+    "!"/"?" são o único sinal de tom que temos sem processar o áudio
+    original (sem pitch/energia extraídos ainda — ver
+    docs/moss_tts_investigation.md). `None` = deixa o modelo decidir
+    sozinho, comportamento de antes desta função existir.
+
+    Checa "!" antes de "?" de propósito: uma frase como "Corre, agora!?"
+    tem os dois, e ênfase/urgência (exclamação) é o sinal mais forte dos
+    dois pra decidir tom de voz.
+
+    Não validado contra o modelo real ainda — hipótese, não medição.
+    """
+    if "!" in text:
+        return "fale com ênfase e emoção genuína, não leia como narração neutra de audiobook"
+    if "?" in text:
+        return "fale com entonação de pergunta real, subindo o tom no final"
+    return None
+
+
 def is_within_tolerance(achieved_seconds: float, target_seconds: float, tolerance: float) -> bool:
     if target_seconds <= 0:
         return False

@@ -141,7 +141,11 @@ def cmd_translate(args: argparse.Namespace) -> None:
                     f"{MAX_TRANSLATE_ATTEMPTS} falhou ({exc})"
                 )
 
-        ranked = rank_candidates(candidates, job["target_syllables"]) if candidates else []
+        ranked = (
+            rank_candidates(candidates, job["target_syllables"], job["source_text"])
+            if candidates
+            else []
+        )
         results.append(
             {
                 "id": job["id"],
@@ -151,6 +155,7 @@ def cmd_translate(args: argparse.Namespace) -> None:
                         "syllables": c.syllables,
                         "budget_score": c.budget_score,
                         "naturalness_score": c.naturalness_score,
+                        "expressiveness_score": c.expressiveness_score,
                         "score": c.score,
                     }
                     for c in ranked
@@ -173,6 +178,7 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
         adjust_tokens_for_retry,
         apply_ipa_overrides,
         duration_to_tokens,
+        infer_delivery_instruction,
         inject_pauses,
         is_within_tolerance,
         time_stretch_to_duration,
@@ -250,10 +256,19 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
     N_CANDIDATES = 3
 
     def synthesize_batch(
-        text: str, tokens: int, reference: list[str] | None, out_dir: Path, job_id: str
+        text: str,
+        tokens: int,
+        reference: list[str] | None,
+        out_dir: Path,
+        job_id: str,
+        instruction: str | None,
     ) -> list[tuple[Path, float]]:
         message = processor.build_user_message(
-            text=text, language=language, tokens=tokens, reference=reference
+            text=text,
+            language=language,
+            tokens=tokens,
+            reference=reference,
+            instruction=instruction,
         )
         batch = processor([[message]] * N_CANDIDATES, mode="generation")
         input_ids = batch["input_ids"].to(device)
@@ -291,14 +306,19 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
 
         reference = [job["reference_audio_path"]] if job.get("reference_audio_path") else None
         target_seconds = job["target_seconds"]
+        # T0.12c: só a pontuação do texto traduzido, sem processar o áudio
+        # original ainda — ver docstring de infer_delivery_instruction.
+        instruction = infer_delivery_instruction(text)
 
         tokens = duration_to_tokens(target_seconds)
-        candidates = synthesize_batch(text, tokens, reference, out_dir, job["id"])
+        candidates = synthesize_batch(text, tokens, reference, out_dir, job["id"], instruction)
         attempts = 1
 
         if not is_within_tolerance(median_seconds(candidates), target_seconds, tolerance):
             tokens = adjust_tokens_for_retry(tokens, median_seconds(candidates), target_seconds)
-            candidates = synthesize_batch(text, tokens, reference, out_dir, job["id"])
+            candidates = synthesize_batch(
+                text, tokens, reference, out_dir, job["id"], instruction
+            )
             attempts = 2
 
         within_tolerance = is_within_tolerance(

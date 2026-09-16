@@ -8,6 +8,7 @@ from packages.pipeline.synthesis import (
     adjust_tokens_for_retry,
     apply_ipa_overrides,
     duration_to_tokens,
+    infer_delivery_instruction,
     inject_pauses,
     is_within_tolerance,
     time_stretch_to_duration,
@@ -161,3 +162,23 @@ def test_time_stretch_to_duration_respects_custom_max_ratio() -> None:
     stretched = time_stretch_to_duration(audio, SAMPLE_RATE, target_seconds=0.4, max_ratio=10.0)
     achieved = len(stretched) / SAMPLE_RATE
     assert achieved == pytest.approx(0.4, abs=0.05)
+
+
+def test_infer_delivery_instruction_exclamation() -> None:
+    assert infer_delivery_instruction("Corre agora!") is not None
+
+
+def test_infer_delivery_instruction_question() -> None:
+    instruction = infer_delivery_instruction("Você vem comigo?")
+    assert instruction is not None
+    assert "pergunta" in instruction
+
+
+def test_infer_delivery_instruction_exclamation_takes_priority_over_question() -> None:
+    exclamation_instruction = infer_delivery_instruction("Corre, agora!")
+    question_instruction = infer_delivery_instruction("Você vem?")
+    assert exclamation_instruction != question_instruction
+
+
+def test_infer_delivery_instruction_neutral_text_returns_none() -> None:
+    assert infer_delivery_instruction("Eles foram embora ontem à noite.") is None

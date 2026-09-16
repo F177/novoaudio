@@ -299,12 +299,72 @@ não na arquitetura do modelo em si.
 1. ~~Excedente de duração~~ — **feito** (`time_stretch_to_duration`).
 2. ~~Texto isolado sem contexto~~ — **feito** (fusão por `min_word_count`,
    confirmado com o usuário, resultado real medido acima).
-3. Investigar o achado colateral do bookkeeping de retry (segmentos limpos
-   sendo re-sintetizados sem necessidade) — desperdício de GPU, não parece
-   corromper o resultado mas vale entender.
-4. Rodar os 10 vídeos do portão de decisão do T0.12 pra medir a taxa de
-   correção manual de verdade com os três fixes juntos — a validação real
-   que faltava antes de considerar essa fase do pipeline pronta.
+3. ~~Bookkeeping de retry~~ — **obsoleto**: o mecanismo de retry por
+   rodadas que tinha esse bug foi inteiramente substituído (ver próxima
+   seção), o código com o bug nem existe mais.
+4. Rodar os vídeos do portão de decisão do T0.12 pra medir a taxa de
+   correção manual de verdade com todos os fixes juntos (piso de tokens,
+   time-stretch, fusão por palavra, lote de candidatos, voz masculina) —
+   4 de 5 vídeos de teste feitos (Avengers, LEGO Batman, NFL, Clairo);
+   falta o F1 (o maior, `Drivers-React-After-Qualifying`), pausado a
+   pedido do usuário pra priorizar o fix do retry primeiro.
+
+### 2026-09-15 — retry por rodadas substituído por lote de candidatos paralelos
+
+Reclamação real do usuário: o retry por rodadas "consome muito, triplica
+tempo e custo, ruim pra prototipar". Achado que resolveu: o `generate()`
+do MOSS-TTS já trata `batch_size` como dimensão real em toda a máquina de
+estados do delay pattern (confirmado lendo o código, não suposição) — 3
+amostras independentes da MESMA frase numa chamada em lote levaram
+**3,52s**, quase o mesmo tempo de 1 amostra sozinha (2-4s). Isso significa
+que gerar várias tentativas em paralelo é essencialmente de graça em GPU —
+o custo do retry antigo era quase todo overhead de processo/rede (rodada =
+processo novo no Pod + round-trip de avaliação), não geração em si.
+
+Reescrito (`scripts/pod_worker.py::cmd_synthesize`, `scripts/dub.py`):
+cada segmento gera `N_CANDIDATES=3` amostras numa chamada só; avalia todas
+via Whisper numa única leva; escolhe a melhor localmente
+(`pick_best_synthesis`, reusa `_is_bad_synthesis` do T0.14) sem round-trip
+extra. **Resultado real** (Avengers, mesmo vídeo testado o dia todo):
+pipeline completo caiu de ~20-25min pra **~6 minutos**. Novo campo no
+relatório, `segments_needing_non_first_candidate_rate` (45% no teste) —
+mostra quantas vezes o candidato #0 sozinho teria saído ruim, tornando
+visível o que antes só aparecia como "precisou de retry caro".
+
+Também nesta sessão: `--vocals-only` (CLI, bypass do remix com fundo, só
+pra avaliação — não é comportamento padrão), voz de referência trocada
+pra um homem adulto real (áudio de 13,84s fornecido pelo usuário,
+`312_84sil_0pause.wav`, ~118Hz — ver [[tts_lora_pending_fixes]]), e
+`scripts/dub.py` agora salva `<video>_transcript.json` e
+`<video>_traducao.json` ao lado de todo vídeo dublado.
+
+### 2026-09-15 — "soa como audiobook": dois fixes sem GPU, não validados ainda
+
+Usuário reportou que a dublagem soa como narração de audiobook, não como
+a entrega natural do áudio original. Sem GPU disponível nesta sessão pra
+validar contra o modelo real — implementado e testado só com dado
+sintético, **pendente de validação real na próxima sessão**:
+
+1. `packages/pipeline/translation.py`: prompt agora pede explicitamente
+   pra preservar pontuação de ênfase ("!", "?", "...") do original: novo
+   `expressiveness_score` em `rank_candidates` recompensa candidatos que
+   preservam essa pontuação (pesos rebalanceados: orçamento 0,7→0,6,
+   naturalidade 0,3→0,2, expressividade 0,2 novo).
+2. `packages/pipeline/synthesis.py::infer_delivery_instruction`: deriva
+   uma instrução de estilo pro campo `instruction` do MOSS-TTS (existe na
+   API, nunca tinha sido usado) a partir da mesma pontuação.
+
+Base para os dois: achado já documentado em
+`calibration.json.known_issues.flat_delivery_on_concatenated_clauses` —
+o MOSS-TTS não tem parâmetro explícito de tom, "!" parece ser o único
+sinal implícito de emoção que ele usa. **Não medido se isso realmente
+muda o áudio gerado** — só a lógica de seleção/prompt está testada.
+Próximo passo real: rodar contra o modelo de verdade e ouvir a diferença.
+
+Não implementado ainda (mais esforço, precisa do Pod): extrair
+energia/pitch do áudio original (stem de voz já separado pelo Demucs) e
+mapear pra `instruction` ou pra pós-processar o volume do segmento
+sintetizado seguindo o contorno original.
 
 ## Decisão (2026-09-14, confirmada explicitamente com o usuário)
 

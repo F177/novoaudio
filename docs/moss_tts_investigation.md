@@ -366,6 +366,34 @@ energia/pitch do áudio original (stem de voz já separado pelo Demucs) e
 mapear pra `instruction` ou pra pós-processar o volume do segmento
 sintetizado seguindo o contorno original.
 
+### 2026-09-18 — Pod novo (3º da sessão), rebuild validado, achado novo de torchcodec
+
+Gap de sessão de alguns dias; Pod anterior fechado pelo usuário. Toda vez
+que isso acontece o volume de rede vem vazio de novo (region-locked, não
+persiste entre Pods) — reconstruído do zero seguindo a mesma receita já
+validada (venv `asr` com `numpy<2` + pins de `pyannote.*`, venv `tts` com
+`librosa` incluído desde o início desta vez).
+
+**Achado novo:** `pip install torchcodec --index-url .../cu128` sem
+versão pinada resolveu pra `torchcodec==0.11.1+cu128` — essa versão falha
+ao carregar (`Could not load libtorchcodec`, tenta ffmpeg 5-8 que não
+existem no sistema, e a variante ffmpeg4 dá
+`undefined symbol: torch_dtype_float4_e2m1fn_x2`, incompatível com torch
+2.9.1). Confirmado que `torchcodec==0.8.1` (a mesma versão já validada
+numa sessão anterior, mesmo par torch/cu128) funciona normalmente. Pino
+explícito na receita de rebuild a partir de agora: `pip install
+torchcodec==0.8.1 --index-url https://download.pytorch.org/whl/cu128` —
+não confiar no resolver do pip pra essa lib, ela não é retrocompatível
+entre versões torch como o normal do PyPI.
+
+Smoke test rodado após o fix (`pod_worker.py synthesize` com 1 job curto,
+3 candidatos): pipeline completo funcionou — geração em lote, retry por
+tolerância, compressão por time-stretch no piso de duração, tudo
+disparou como esperado (`tokens_used=40` = piso, `attempts=2`,
+`stretched=true`, `within_tolerance=true` nos 3 candidatos). Ambiente
+confirmado pronto para retomar o trabalho pendente (F1, validação das
+duas correções de naturalidade contra o modelo real, etc.).
+
 ## Decisão (2026-09-14, confirmada explicitamente com o usuário)
 
 - Mexer no código de geração do MOSS-TTS em si é uma escolha consciente,

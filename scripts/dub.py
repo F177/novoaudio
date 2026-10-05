@@ -317,9 +317,43 @@ def save_transcript_and_translation(
 
 
 DEFAULT_REPORTS_DIR = Path("reports")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def update_dashboard(report: dict[str, Any], reports_dir: Path = DEFAULT_REPORTS_DIR) -> Path:
+def _get_git_state(repo_dir: Path = _REPO_ROOT) -> tuple[str | None, bool]:
+    """Lê o SHA do commit atual e se a working tree está sujo (T0.18) —
+    impuro (subprocess), por isso mora aqui e não em `packages/pipeline`.
+    Devolve `(None, False)` se `repo_dir` não for um repo git, em vez de
+    lançar — não deve impedir o dashboard de ser gravado.
+    """
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+        return sha, dirty
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None, False
+
+
+def update_dashboard(
+    report: dict[str, Any],
+    reports_dir: Path = DEFAULT_REPORTS_DIR,
+    *,
+    repo_dir: Path = _REPO_ROOT,
+) -> Path:
     """Acrescenta esta execução a UM histórico local só (`history.json`) e
     reescreve o dashboard consolidado (`dashboard.html`) a partir dele —
     pedido explícito do usuário: primeiro "relatório local, não artefato
@@ -327,14 +361,22 @@ def update_dashboard(report: dict[str, Any], reports_dir: Path = DEFAULT_REPORTS
     local com todos os relatórios em vez de ter um arquivo pra cada"
     (2026-09-27). `build_history_entry`/`render_dashboard_html`
     (packages/pipeline/report.py) são puros; a leitura/escrita em disco
-    mora aqui.
+    e a leitura do estado do git (T0.18) moram aqui. `repo_dir` é
+    parametrizável pra poder testar contra um repo git de verdade em
+    `tmp_path`, em vez de mockar `_get_git_state` (convenção do projeto:
+    sem mock, comportamento real).
     """
     reports_dir.mkdir(parents=True, exist_ok=True)
     history_path = reports_dir / "history.json"
     history = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else []
 
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
-    history.append(build_history_entry(report, generated_at=generated_at))
+    git_sha, git_dirty = _get_git_state(repo_dir)
+    history.append(
+        build_history_entry(
+            report, generated_at=generated_at, git_sha=git_sha, git_dirty=git_dirty
+        )
+    )
     history_path.write_text(json.dumps(history, ensure_ascii=False), encoding="utf-8")
 
     dashboard_path = reports_dir / "dashboard.html"

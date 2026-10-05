@@ -1,12 +1,24 @@
 import json
+import subprocess
 
 from scripts.dub import (
+    _get_git_state,
     _is_bad_synthesis,
     build_stage_report,
     pick_best_synthesis,
     save_transcript_and_translation,
+    update_dashboard,
     words_from_whisperx_transcript,
 )
+
+
+def _init_scratch_git_repo(repo_dir) -> None:
+    repo_dir.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo_dir, check=True)
+    # autoria fixa — repo descartável de teste, não precisa da identidade
+    # real do usuário, e CI não tem `user.name`/`user.email` configurados.
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo_dir, check=True)
 
 
 def test_words_from_whisperx_transcript_flattens_and_orders_by_time() -> None:
@@ -238,3 +250,70 @@ def test_save_transcript_and_translation_skips_missing_transcript(tmp_path) -> N
     transcript_path, _ = save_transcript_and_translation(report, cache_dir, out_path)
 
     assert not transcript_path.exists()
+
+
+def test_get_git_state_clean_tree_reports_not_dirty(tmp_path) -> None:
+    repo_dir = tmp_path / "repo"
+    _init_scratch_git_repo(repo_dir)
+    (repo_dir / "file.txt").write_text("v1", encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo_dir, check=True)
+    expected_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    sha, dirty = _get_git_state(repo_dir)
+
+    assert sha == expected_sha
+    assert dirty is False
+
+
+def test_get_git_state_modified_file_reports_dirty(tmp_path) -> None:
+    repo_dir = tmp_path / "repo"
+    _init_scratch_git_repo(repo_dir)
+    (repo_dir / "file.txt").write_text("v1", encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo_dir, check=True)
+
+    (repo_dir / "file.txt").write_text("v2 sem commitar", encoding="utf-8")
+    _, dirty = _get_git_state(repo_dir)
+
+    assert dirty is True
+
+
+def test_get_git_state_non_git_directory_returns_none_without_raising(tmp_path) -> None:
+    not_a_repo = tmp_path / "not_a_repo"
+    not_a_repo.mkdir()
+
+    sha, dirty = _get_git_state(not_a_repo)
+
+    assert sha is None
+    assert dirty is False
+
+
+def test_update_dashboard_history_entry_includes_git_sha_and_dirty(tmp_path) -> None:
+    repo_dir = tmp_path / "repo"
+    _init_scratch_git_repo(repo_dir)
+    (repo_dir / "file.txt").write_text("v1", encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo_dir, check=True)
+    expected_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    report = {"video": "video.mp4", "output": "video.dub.mp4", "segments": []}
+    reports_dir = tmp_path / "reports"
+
+    update_dashboard(report, reports_dir, repo_dir=repo_dir)
+    history = json.loads((reports_dir / "history.json").read_text(encoding="utf-8"))
+    assert history[0]["git_sha"] == expected_sha
+    assert history[0]["git_dirty"] is False
+
+    # segunda execução com a working tree sujo — cada entrada reflete o
+    # estado do git NO MOMENTO daquela execução, não é recalculada depois
+    (repo_dir / "file.txt").write_text("v2 sem commitar", encoding="utf-8")
+    update_dashboard(report, reports_dir, repo_dir=repo_dir)
+    history = json.loads((reports_dir / "history.json").read_text(encoding="utf-8"))
+    assert len(history) == 2
+    assert history[0]["git_dirty"] is False
+    assert history[1]["git_dirty"] is True

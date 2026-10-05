@@ -141,7 +141,11 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
     align_model, align_metadata = whisperx.load_align_model(
         language_code=language, device=device
     )
-    diarize_model = DiarizationPipeline(use_auth_token=os.environ["HF_TOKEN"], device=device)
+    # whisperx 3.8.6 renomeou o parâmetro (`use_auth_token` -> `token`,
+    # mesma convenção que o huggingface_hub adotou em toda a biblioteca) —
+    # achado real no rebuild do Pod de 2026-10-05, não documentado em
+    # nenhum changelog consultado antes.
+    diarize_model = DiarizationPipeline(token=os.environ["HF_TOKEN"], device=device)
 
     audio = whisperx.load_audio(args.input)
     result = asr_model.transcribe(audio, batch_size=16)
@@ -233,7 +237,7 @@ def cmd_translate(args: argparse.Namespace) -> None:
         for chunk_start in range(0, len(pending), TRANSLATE_BATCH_SIZE):
             chunk = pending[chunk_start : chunk_start + TRANSLATE_BATCH_SIZE]
             responses = generate_batch(chunk)
-            for job, response in zip(chunk, responses):
+            for job, response in zip(chunk, responses, strict=True):
                 try:
                     candidates_by_id[job["id"]] = parse_candidates(response)
                 except ValueError as exc:

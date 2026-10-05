@@ -29,18 +29,39 @@ def _report(**overrides) -> dict:
     return base
 
 
-def _entry(**overrides) -> dict:
-    entry = build_history_entry(_report(**overrides), generated_at="2026-09-27T10:00:00")
-    return entry
+def _entry(*, git_sha: str | None = "abc1234", git_dirty: bool = False, **overrides) -> dict:
+    return build_history_entry(
+        _report(**overrides),
+        generated_at="2026-09-27T10:00:00",
+        git_sha=git_sha,
+        git_dirty=git_dirty,
+    )
 
 
 def test_build_history_entry_extracts_expected_fields() -> None:
-    entry = build_history_entry(_report(), generated_at="2026-09-27T10:00:00")
+    entry = build_history_entry(
+        _report(), generated_at="2026-09-27T10:00:00", git_sha="abc1234", git_dirty=False
+    )
     assert entry["generated_at"] == "2026-09-27T10:00:00"
     assert entry["video"] == "video.mp4"
     assert entry["scorecard"]["verdict"] == "aprovado"
     assert entry["diagnostics"] == []
     assert entry["segments"] == []
+
+
+def test_build_history_entry_includes_git_sha_and_dirty_flag() -> None:
+    entry = build_history_entry(
+        _report(), generated_at="2026-09-27T10:00:00", git_sha="deadbeef", git_dirty=True
+    )
+    assert entry["git_sha"] == "deadbeef"
+    assert entry["git_dirty"] is True
+
+
+def test_build_history_entry_allows_unknown_git_sha() -> None:
+    entry = build_history_entry(
+        _report(), generated_at="2026-09-27T10:00:00", git_sha=None, git_dirty=False
+    )
+    assert entry["git_sha"] is None
 
 
 def test_render_dashboard_html_returns_full_document() -> None:
@@ -65,6 +86,25 @@ def test_render_dashboard_html_embeds_all_runs_in_payload() -> None:
     html = render_dashboard_html(history)
     payload = _extract_payload(html)
     assert [e["video"] for e in payload] == ["a.mp4", "b.mp4", "c.mp4"]
+
+
+def test_render_dashboard_html_payload_carries_dirty_flag_per_run() -> None:
+    # T0.18: execução com working tree sujo precisa aparecer marcada no
+    # dashboard — a marcação em si é JS client-side (não dá pra executar
+    # num teste Python), então o teste garante o que é verificável aqui:
+    # o dado chega certo no payload, e a lógica de marcação (classe
+    # "dirty-badge" condicionada a `git_dirty`) está presente no HTML/JS
+    # servido.
+    history = [
+        _entry(video="clean.mp4", git_dirty=False),
+        _entry(video="dirty.mp4", git_dirty=True),
+    ]
+    html = render_dashboard_html(history)
+    payload = _extract_payload(html)
+    assert payload[0]["git_dirty"] is False
+    assert payload[1]["git_dirty"] is True
+    assert "dirty-badge" in html
+    assert "entry.git_dirty" in html
 
 
 def test_render_dashboard_html_never_inlines_segment_text_as_raw_html() -> None:

@@ -40,10 +40,18 @@ NOT_COMPUTED_FLAGS = {"traducao_infiel", "locutor_suspeito"}
 VERDICT_LABELS = {"aprovado": "Aprovado", "revisar": "Revisar", "problematico": "Problemático"}
 
 
-def build_history_entry(report: dict[str, Any], *, generated_at: str) -> dict[str, Any]:
+def build_history_entry(
+    report: dict[str, Any],
+    *,
+    generated_at: str,
+    git_sha: str | None,
+    git_dirty: bool,
+) -> dict[str, Any]:
     """Reduz um `report` completo a um registro de histórico. `generated_at`
-    (ISO 8601) vem de quem chama — mantém esta função determinística/pura,
-    sem chamar relógio (mesma regra de `packages/pipeline`)."""
+    (ISO 8601), `git_sha` e `git_dirty` vêm de quem chama — mantém esta
+    função determinística/pura, sem chamar relógio nem git (mesma regra de
+    `packages/pipeline`; a leitura de `git` é impura e mora em
+    `scripts/dub.py::_get_git_state`, T0.18)."""
     return {
         "generated_at": generated_at,
         "video": report.get("video", ""),
@@ -52,6 +60,8 @@ def build_history_entry(report: dict[str, Any], *, generated_at: str) -> dict[st
         "scorecard": report.get("scorecard", {}),
         "diagnostics": report.get("diagnostics", []),
         "segments": report.get("segments", []),
+        "git_sha": git_sha,
+        "git_dirty": git_dirty,
     }
 
 
@@ -133,6 +143,7 @@ _STYLE = """
   .dot.aprovado { background: var(--good); }
   .dot.revisar { background: var(--warning); }
   .dot.problematico { background: var(--critical); }
+  .dirty-badge { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; color: var(--warning); background: var(--warning-soft); border-radius: 4px; padding: 1px 5px; flex: none; }
 
   .detail { padding: 32px 28px 64px; max-width: 900px; }
   header.run-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; padding-block-end: 20px; border-bottom: 1px solid var(--border); }
@@ -240,9 +251,10 @@ _SCRIPT = """
       const sc = entry.scorecard || {};
       const item = document.createElement("div");
       item.className = "run-item" + (i === selectedIndex ? " selected" : "");
+      const dirtyBadge = entry.git_dirty ? '<span class="dirty-badge" title="working tree sujo quando essa execução rodou">sujo</span>' : '';
       item.innerHTML =
         '<div class="run-item-top"><span class="dot ' + esc(sc.verdict) + '"></span>' +
-        '<span class="run-item-name">' + esc(baseName(entry.video)) + '</span></div>' +
+        '<span class="run-item-name">' + esc(baseName(entry.video)) + '</span>' + dirtyBadge + '</div>' +
         '<div class="run-item-meta"><span>' + esc(fmtWhen(entry.generated_at)) + '</span>' +
         '<span class="tabular">' + fmtPct(sc.any_flag_rate || 0) + '</span></div>';
       item.addEventListener("click", () => { selectedIndex = i; renderSidebar(); renderDetail(); });
@@ -275,12 +287,15 @@ _SCRIPT = """
     const sc = entry.scorecard || {};
     const assembly = entry.assembly || {};
     const flagsOn = Object.entries(assembly).filter(([, v]) => v === true).map(([k]) => k).join(", ") || "nenhuma (padrão)";
+    const shaShort = entry.git_sha ? entry.git_sha.slice(0, 7) : "desconhecido";
+    const gitLine = shaShort + (entry.git_dirty ? " (working tree sujo)" : "");
 
     detail.innerHTML =
       '<header class="run-header"><div><div class="eyebrow">novoaudio &middot; placar de qualidade</div>' +
       '<h1>Raio-X da Dublagem</h1>' +
       '<div class="video-name">' + esc(entry.video) + '</div>' +
-      '<div class="video-name">' + esc(fmtWhen(entry.generated_at)) + ' &middot; etapas ligadas: ' + esc(flagsOn) + '</div></div>' +
+      '<div class="video-name">' + esc(fmtWhen(entry.generated_at)) + ' &middot; etapas ligadas: ' + esc(flagsOn) + '</div>' +
+      '<div class="video-name">commit ' + esc(gitLine) + '</div></div>' +
       '<div class="verdict ' + esc(sc.verdict) + '">' + esc(VERDICT_LABELS[sc.verdict] || sc.verdict) + '</div></header>' +
       '<section><div class="tiles" id="tiles"></div></section>' +
       '<section><div class="section-title">Suspeitas por tipo</div>' +

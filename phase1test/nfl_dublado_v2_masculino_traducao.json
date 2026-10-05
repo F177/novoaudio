@@ -1,0 +1,618 @@
+[
+  {
+    "id": "seg0000",
+    "t_inicio": 1.584,
+    "t_fim": 9.062,
+    "texto_original": "I got beans, greens, potatoes, tomatoes, lamb, fries, y'all, y'all, beans, greens, potatoes, tomatoes, chicken, turkeys, wrap, you",
+    "traducao_usada": "Tô com feijão, couve, batatas, tomates, carne de cordeiro, fritas, vcs, vcs, feijão, couve, batatas, tomates, frango, peru, embrulhado, né"
+  },
+  {
+    "id": "seg0001",
+    "t_inicio": 9.082,
+    "t_fim": 11.68,
+    "texto_original": "made it! Hurts has time.",
+    "traducao_usada": "Deu! Dói no instante!"
+  },
+  {
+    "id": "seg0002",
+    "t_inicio": 12.1,
+    "t_fim": 14.341,
+    "texto_original": "Now locates Barkley out of the backfield. Barkley",
+    "traducao_usada": "Vou localizar o Barkley vindo do backfield, tá?"
+  },
+  {
+    "id": "seg0003",
+    "t_inicio": 14.721,
+    "t_fim": 15.981,
+    "texto_original": "slips two tackles and",
+    "traducao_usada": "põe pra fora os dois toques"
+  },
+  {
+    "id": "seg0004",
+    "t_inicio": 16.021,
+    "t_fim": 18.922,
+    "texto_original": "picks up the first down. Tripping up in the air to the",
+    "traducao_usada": "Pega o primeiro down, quase cai no ar pra"
+  },
+  {
+    "id": "seg0005",
+    "t_inicio": 19.942,
+    "t_fim": 25.264,
+    "texto_original": "The amount of moves right here makes the first guy miss. The spin move at the last second.",
+    "traducao_usada": "Aqui tá muitos movs, o cara da frente acerta a mão. A virada no final tava pra dar no zero."
+  },
+  {
+    "id": "seg0006",
+    "t_inicio": 25.764,
+    "t_fim": 28.725,
+    "texto_original": "What is that? Bro,",
+    "traducao_usada": "O que é aquilo, mano?"
+  },
+  {
+    "id": "seg0007",
+    "t_inicio": 29.205,
+    "t_fim": 32.286,
+    "texto_original": "he turned around. Jumped over him.",
+    "traducao_usada": "Ele se virou e, né, pulou nele."
+  },
+  {
+    "id": "seg0008",
+    "t_inicio": 33.826,
+    "t_fim": 36.987,
+    "texto_original": "With six different receivers, and this time he lost one inch.",
+    "traducao_usada": "Com seis coisas pra receber, ele tá sem um centímetro."
+  },
+  {
+    "id": "seg0009",
+    "t_inicio": 38.368,
+    "t_fim": 41.73,
+    "texto_original": "Picked off at the goal line. That's Buda Baker.",
+    "traducao_usada": "Pega no goal, é Buda Baker."
+  },
+  {
+    "id": "seg0010",
+    "t_inicio": 42.09,
+    "t_fim": 46.392,
+    "texto_original": "Buda Baker out in front. Can Metcalf track him down? Can he chase him down?",
+    "traducao_usada": "Buda tá na frente. Metcalf consegue alcançar? Consegue dar uma caça? "
+  },
+  {
+    "id": "seg0011",
+    "t_inicio": 47.252,
+    "t_fim": 49.453,
+    "texto_original": "And he does to save a touchdown. And",
+    "traducao_usada": "Ele tá lá pra salvar um touchdown, né?"
+  },
+  {
+    "id": "seg0012",
+    "t_inicio": 50.474,
+    "t_fim": 52.755,
+    "texto_original": "Metcalf just refused to let it go.",
+    "traducao_usada": "Metcalf tá recusado a largar isso."
+  },
+  {
+    "id": "seg0013",
+    "t_inicio": 53.495,
+    "t_fim": 57.277,
+    "texto_original": "It was unbelievable how much ground he made up. That had to be",
+    "traducao_usada": "Ele deu uma distância impressionante, tinha que ser"
+  },
+  {
+    "id": "seg0014",
+    "t_inicio": 57.737,
+    "t_fim": 62.719,
+    "texto_original": "yards on a very fast Buda Baker, and he just tracked him down.",
+    "traducao_usada": "Ele pegou ele na velocidade no Buda Baker."
+  },
+  {
+    "id": "seg0015",
+    "t_inicio": 64.94,
+    "t_fim": 69.211,
+    "texto_original": "Four-man rush. Rogers to the end zone.",
+    "traducao_usada": "Rogers a quatro pra end zone. Cê viu?"
+  },
+  {
+    "id": "seg0016",
+    "t_inicio": 69.691,
+    "t_fim": 73.513,
+    "texto_original": "And Wilson hitting one-handed and stay inbounds.",
+    "traducao_usada": "Wilson de mão só, se controlando pra ficar dentro."
+  },
+  {
+    "id": "seg0017",
+    "t_inicio": 74.414,
+    "t_fim": 75.674,
+    "texto_original": "The left shin hit",
+    "traducao_usada": "Pifou o joelho esquerdo"
+  },
+  {
+    "id": "seg0018",
+    "t_inicio": 76.035,
+    "t_fim": 81.918,
+    "texto_original": "the ground inbounds before the knee went out of bounds. It is a touchdown.",
+    "traducao_usada": "A terra tá dentro de campo antes do joelho sair fora de campo. É touchdown."
+  },
+  {
+    "id": "seg0019",
+    "t_inicio": 82.998,
+    "t_fim": 85.159,
+    "texto_original": "Every yard, I mean, they're having to earn every bit of it.",
+    "traducao_usada": "Cada metro, tá, eles têm que trabalhar pra ganhar tudo isso."
+  },
+  {
+    "id": "seg0020",
+    "t_inicio": 86.2,
+    "t_fim": 89.762,
+    "texto_original": "Walker out of the backfield, flag down on the far side of the field.",
+    "traducao_usada": "Walker saiu da linha de scrimmage, bandeira pra lado longe."
+  },
+  {
+    "id": "seg0021",
+    "t_inicio": 90.482,
+    "t_fim": 93.804,
+    "texto_original": "They're letting this play go. For now, Walker's got a first down.",
+    "traducao_usada": "Eles deixaram isso acontecer. Walker tá com um downs pelo menos por enquanto."
+  },
+  {
+    "id": "seg0022",
+    "t_inicio": 95.396,
+    "t_fim": 101.555,
+    "texto_original": "He was brought down, but evidently wasn't down by contact, but a flag is down on the far side of the field.",
+    "traducao_usada": "Ele caiu, mas aparentemente não foi por contato, mas uma bandeira tá no lado longe do campo."
+  },
+  {
+    "id": "seg0023",
+    "t_inicio": 103.481,
+    "t_fim": 104.983,
+    "texto_original": "And Manning's going to heed.",
+    "traducao_usada": "Manning vai prestar atenção."
+  },
+  {
+    "id": "seg0024",
+    "t_inicio": 105.523,
+    "t_fim": 107.585,
+    "texto_original": "One is... Oh, there's a flag.",
+    "traducao_usada": "É uma... Ah, tem uma bandeira."
+  },
+  {
+    "id": "seg0025",
+    "t_inicio": 107.965,
+    "t_fim": 110.627,
+    "texto_original": "Beckham's one-handed catch. How in the world?",
+    "traducao_usada": "Beckham pegou aquilo de mão só. Caramba!"
+  },
+  {
+    "id": "seg0026",
+    "t_inicio": 111.008,
+    "t_fim": 115.391,
+    "texto_original": "Oh, my goodness. And Brandon Carr was back there. I mean, he is",
+    "traducao_usada": "Ó, meu bem. O Brandon Carr de volta. Eu quero dizer, ele tá"
+  },
+  {
+    "id": "seg0027",
+    "t_inicio": 116.753,
+    "t_fim": 118.654,
+    "texto_original": "insane. How do you make that catch?",
+    "traducao_usada": "Insane. Cê conseguiu aquele catch?"
+  },
+  {
+    "id": "seg0028",
+    "t_inicio": 119.195,
+    "t_fim": 127.642,
+    "texto_original": "Oh, my goodness. On the move down the sideline and reaching up for it is George Pickens. What a",
+    "traducao_usada": "Óh meu Deus, Geórgio Pickens se movendo pelo lado e esticando pra cima pro lance, né?"
+  },
+  {
+    "id": "seg0029",
+    "t_inicio": 127.802,
+    "t_fim": 130.024,
+    "texto_original": "catch with the right hand.",
+    "traducao_usada": "cê pega com a mão direita, né?"
+  },
+  {
+    "id": "seg0030",
+    "t_inicio": 130.544,
+    "t_fim": 134.305,
+    "texto_original": "by george picketts this is a guy that's known when he was in college at georgia",
+    "traducao_usada": "George Picketts tá um cara conhecido qdo era da faculdade no Georgia"
+  },
+  {
+    "id": "seg0031",
+    "t_inicio": 134.705,
+    "t_fim": 138.686,
+    "texto_original": "vertical stretch the defense make plays incredible ball skills",
+    "traducao_usada": "defesa faz jogadas incríveis com habilidades de bola"
+  },
+  {
+    "id": "seg0032",
+    "t_inicio": 139.066,
+    "t_fim": 140.606,
+    "texto_original": "and he says quiet",
+    "traducao_usada": "tá falando baixo né"
+  },
+  {
+    "id": "seg0033",
+    "t_inicio": 141.827,
+    "t_fim": 146.568,
+    "texto_original": "gain of go pretty good coverage by the rookie corner",
+    "traducao_usada": "o corneta novo já tá dando cobertura boa"
+  },
+  {
+    "id": "seg0034",
+    "t_inicio": 146.968,
+    "t_fim": 147.868,
+    "texto_original": "but just drive starts",
+    "traducao_usada": "mas só começa"
+  },
+  {
+    "id": "seg0035",
+    "t_inicio": 147.988,
+    "t_fim": 149.229,
+    "texto_original": "at the one and looking",
+    "traducao_usada": "está olhando, né"
+  },
+  {
+    "id": "seg0036",
+    "t_inicio": 149.289,
+    "t_fim": 152.529,
+    "texto_original": "for a little breathing room and they get that and plenty more",
+    "traducao_usada": "quer um espaço pra respirar e eles dão e muito"
+  },
+  {
+    "id": "seg0037",
+    "t_inicio": 153.149,
+    "t_fim": 154.95,
+    "texto_original": "derrick henry still going",
+    "traducao_usada": "Derrick Henry ainda tá por aí, né?"
+  },
+  {
+    "id": "seg0038",
+    "t_inicio": 159.798,
+    "t_fim": 163.799,
+    "texto_original": "stays inbounds he might go",
+    "traducao_usada": "ele tá dentro dele mesmo pode sair"
+  },
+  {
+    "id": "seg0039",
+    "t_inicio": 164.239,
+    "t_fim": 168.941,
+    "texto_original": "yards for the touchdown unbelievable",
+    "traducao_usada": "tá no touchdown, impressionante, cê marcou"
+  },
+  {
+    "id": "seg0040",
+    "t_inicio": 191.744,
+    "t_fim": 193.205,
+    "texto_original": "Murray out of the pocket.",
+    "traducao_usada": "Murray de fora."
+  },
+  {
+    "id": "seg0041",
+    "t_inicio": 193.925,
+    "t_fim": 197.028,
+    "texto_original": "Seven seconds. Six seconds. Murray heaves it",
+    "traducao_usada": "Sete segundos. Seis. Murray empurra!"
+  },
+  {
+    "id": "seg0042",
+    "t_inicio": 197.048,
+    "t_fim": 201.991,
+    "texto_original": "downfield. It is. Oh, it's caught. It is caught.",
+    "traducao_usada": "tá, tá, é, foi pegado, downfield, oh, pegaram!"
+  },
+  {
+    "id": "seg0043",
+    "t_inicio": 203.332,
+    "t_fim": 209.436,
+    "texto_original": "DeAndre Hopkins. Miraculous. Tadavious White.",
+    "traducao_usada": "DeAndre Hopkins. Miraculous. Tô, né?"
+  },
+  {
+    "id": "seg0044",
+    "t_inicio": 210.617,
+    "t_fim": 213.8,
+    "texto_original": "Jordan Poyer came in late. He's got Micah Hyde on his back.",
+    "traducao_usada": "Jordan chegou atrasado. Ele tá de olho em Micah."
+  },
+  {
+    "id": "seg0045",
+    "t_inicio": 214.716,
+    "t_fim": 216.337,
+    "texto_original": "And catches it and possesses it",
+    "traducao_usada": "Ele cai e pega pra si"
+  },
+  {
+    "id": "seg0046",
+    "t_inicio": 216.697,
+    "t_fim": 218.799,
+    "texto_original": "all the way through. Look at those hands.",
+    "traducao_usada": "tá até o final. Vê aqueleas mãos."
+  },
+  {
+    "id": "seg0047",
+    "t_inicio": 219.199,
+    "t_fim": 222.401,
+    "texto_original": "We keep hearing about those 6X gloves that he wears",
+    "traducao_usada": "Viu aquele cara com as luvas 6X? Sempre ouvimos falar"
+  },
+  {
+    "id": "seg0048",
+    "t_inicio": 222.861,
+    "t_fim": 227.364,
+    "texto_original": "for his large hands. I look like a psycho. I'm just going to keep my helmet on for the rest of the game. Yeah,",
+    "traducao_usada": "Com as mãos grandes. Acho q sou psicótico. Vou manter o capacete todo o jogo. Tô bem, tá?"
+  },
+  {
+    "id": "seg0049",
+    "t_inicio": 227.404,
+    "t_fim": 230.686,
+    "texto_original": "I'm the smart guy with the headbutt, someone with no helmet on. Has",
+    "traducao_usada": " tô o cara smart com o headbutt, sem capac. né "
+  },
+  {
+    "id": "seg0050",
+    "t_inicio": 232.447,
+    "t_fim": 233.668,
+    "texto_original": "Second and goal. Mahomes",
+    "traducao_usada": "Segundo e pra marcar. Mahomes."
+  },
+  {
+    "id": "seg0051",
+    "t_inicio": 234.009,
+    "t_fim": 237.191,
+    "texto_original": "flipping underneath. McKinnon turns it upfield. Dives.",
+    "traducao_usada": "vai lá embaixo. McKinnon joga pra frente. Pega de cabeça."
+  },
+  {
+    "id": "seg0052",
+    "t_inicio": 237.591,
+    "t_fim": 242.254,
+    "texto_original": "Touchdown. And someone keep an eye on this guy right here, Trey Smith.",
+    "traducao_usada": "Touchdown. Alguém deixa esse cara de lado, Trey Smith, tá?"
+  },
+  {
+    "id": "seg0053",
+    "t_inicio": 243.655,
+    "t_fim": 248.017,
+    "texto_original": "A tremendous block on the Pro Bowl All-Pro safety, Justin Simmons,",
+    "traducao_usada": "Simmons deu um bloqueio incrível no safety All-Pro do Pro Bowl"
+  },
+  {
+    "id": "seg0054",
+    "t_inicio": 248.417,
+    "t_fim": 250.418,
+    "texto_original": "that opens up the last bit of pathway.",
+    "traducao_usada": "deixa o último trecho aberto."
+  },
+  {
+    "id": "seg0055",
+    "t_inicio": 252.639,
+    "t_fim": 254.92,
+    "texto_original": "Third and six. Breeze plus.",
+    "traducao_usada": "Tá no três e seis. Breeza mais."
+  },
+  {
+    "id": "seg0056",
+    "t_inicio": 256.08,
+    "t_fim": 258.661,
+    "texto_original": "Oh, he shoveled it behind the back to Thomas.",
+    "traducao_usada": "Ele esfregou de costas pra Thomas, tá?"
+  },
+  {
+    "id": "seg0057",
+    "t_inicio": 258.961,
+    "t_fim": 261.342,
+    "texto_original": "What a completion by Breeze.",
+    "traducao_usada": "Breezee fez um fechamento top!"
+  },
+  {
+    "id": "seg0058",
+    "t_inicio": 261.703,
+    "t_fim": 263.703,
+    "texto_original": "That's the best no gain of the year.",
+    "traducao_usada": "É o melhor sem vantagem do ano."
+  },
+  {
+    "id": "seg0059",
+    "t_inicio": 264.164,
+    "t_fim": 265.884,
+    "texto_original": "And watch Drew Breeze somehow",
+    "traducao_usada": "Aí assista o Drew Breeze"
+  },
+  {
+    "id": "seg0060",
+    "t_inicio": 266.705,
+    "t_fim": 271.583,
+    "texto_original": "flip this ball. Pierre Thomas, the question is, how was Pierre Thomas expecting that?",
+    "traducao_usada": "Vai nessa bola, Pierre. A pergunta é, Pierre, você esperava isso?"
+  },
+  {
+    "id": "seg0061",
+    "t_inicio": 272.783,
+    "t_fim": 274.444,
+    "texto_original": "For Ronald Jones, that's a great start.",
+    "traducao_usada": "Ronald, tá de começo bom pra ele."
+  },
+  {
+    "id": "seg0062",
+    "t_inicio": 275.584,
+    "t_fim": 278.565,
+    "texto_original": "Brady is taken down. Khalil Mack.",
+    "traducao_usada": "Brady foi derrubado, tá Khalil Mack."
+  },
+  {
+    "id": "seg0063",
+    "t_inicio": 280.126,
+    "t_fim": 291.209,
+    "texto_original": "Khalil Mack steps up and gets a sack. Yeah, against the rookie, Tristan Wirfs, and he's able to work around him and get to Brady. He's got him one-on-one. I mean, he's had his hands full",
+    "traducao_usada": "Mack faz o sack em Wirfs, o rookie. Sim, ele conseguiu se enrolar nele e chegou a Brady. Ele tá só nele. Poxa, ele tá tendo que lutar muito, mano"
+  },
+  {
+    "id": "seg0064",
+    "t_inicio": 291.73,
+    "t_fim": 293.69,
+    "texto_original": "here to start his career.",
+    "traducao_usada": "tá aqui pra começar a carreira."
+  },
+  {
+    "id": "seg0065",
+    "t_inicio": 295.111,
+    "t_fim": 301.162,
+    "texto_original": "His body's... Now trying to contain fields. Looking for Nikhil. Harry! What a catch!",
+    "traducao_usada": "Seu corpo tá agora tentando conter campos. Procurando Nikhil. Harry! Que pegada!"
+  },
+  {
+    "id": "seg0066",
+    "t_inicio": 302.862,
+    "t_fim": 306.503,
+    "texto_original": "Inside the Packers. As opposed to when the Saints have the ball.",
+    "traducao_usada": "Dentro do Packers. Ao contrário, a bola tá com os Saints."
+  },
+  {
+    "id": "seg0067",
+    "t_inicio": 307.704,
+    "t_fim": 308.544,
+    "texto_original": "Oh, look at this run.",
+    "traducao_usada": "Olha, veja isso!"
+  },
+  {
+    "id": "seg0068",
+    "t_inicio": 309.264,
+    "t_fim": 313.545,
+    "texto_original": "What a run. Marshawn Lynch. Still on his feet.",
+    "traducao_usada": "Marshawn Lynch. Corrida boa. Ainda de pé. Tá no jogo."
+  },
+  {
+    "id": "seg0069",
+    "t_inicio": 314.765,
+    "t_fim": 317.346,
+    "texto_original": "Has blockers now. He's dancing his way.",
+    "traducao_usada": "Tem bloqueios. Ele tá dançando pra valer."
+  },
+  {
+    "id": "seg0070",
+    "t_inicio": 318.487,
+    "t_fim": 324.753,
+    "texto_original": "For the touchdown! He breaks the tackle of Shanley. Runs through Sharper. Runs through Adele.",
+    "traducao_usada": "Tá no touchdown! Ele quebra o bloqueio do Shanley, corre pro Sharper, pra Adele."
+  },
+  {
+    "id": "seg0071",
+    "t_inicio": 325.133,
+    "t_fim": 331.278,
+    "texto_original": "Runs through Jabari Greer. Get off me, he says to Tracy Porter. It's",
+    "traducao_usada": "Corre por cima de Jabari Greer. Ele diz pra Tracy Porter se afastar de mim."
+  },
+  {
+    "id": "seg0072",
+    "t_inicio": 331.338,
+    "t_fim": 335.722,
+    "texto_original": "a second down and three. Jackson takes it himself. Look at him dart back and forth.",
+    "traducao_usada": "segunda down e três. Jackson faz sozinho. Ele tá correndo pra cá e pra lá."
+  },
+  {
+    "id": "seg0073",
+    "t_inicio": 336.103,
+    "t_fim": 339.346,
+    "texto_original": "Oh! He broke his ankles. Now he's got an entourage.",
+    "traducao_usada": "Óh! Ele quebrou os tornozelos. Agora tá com um bando de gente."
+  },
+  {
+    "id": "seg0074",
+    "t_inicio": 339.786,
+    "t_fim": 341.267,
+    "texto_original": "And he's got a touchdown.",
+    "traducao_usada": "Ei, ele marcou um touchdown."
+  },
+  {
+    "id": "seg0075",
+    "t_inicio": 342.495,
+    "t_fim": 351.283,
+    "texto_original": "He is Houdini. Talk about a tough tackle in the open field. Look at that spin move. Nick Vigil's right there. He leads the team in tackles, and he's got no clue as to his leg",
+    "traducao_usada": "Ele é Houdini. Tá uma boa arrancada aberto. Olha aquele giro. Nick Vigil tá ali. Lidera em arranques, e nem tá sabendo onde tá o pé"
+  },
+  {
+    "id": "seg0076",
+    "t_inicio": 351.704,
+    "t_fim": 352.925,
+    "texto_original": "against the speed of Michael Vick.",
+    "traducao_usada": "contra a velha Michael Vick tá."
+  },
+  {
+    "id": "seg0077",
+    "t_inicio": 352.985,
+    "t_fim": 354.726,
+    "texto_original": "He's replaced by Rasmussen.",
+    "traducao_usada": "Ele deu lugar pra Rasmussen."
+  },
+  {
+    "id": "seg0078",
+    "t_inicio": 355.407,
+    "t_fim": 356.768,
+    "texto_original": "Vick running was tripped up,",
+    "traducao_usada": "Vic tropeçou correndo"
+  },
+  {
+    "id": "seg0079",
+    "t_inicio": 357.949,
+    "t_fim": 361.072,
+    "texto_original": "and he is down at the 46-yard line. You don't",
+    "traducao_usada": "Ele está na linha de 46 jardas. Você não deve"
+  },
+  {
+    "id": "seg0080",
+    "t_inicio": 361.673,
+    "t_fim": 363.795,
+    "texto_original": "tackle Mike Vick. It's a mistake.",
+    "traducao_usada": "Pega Mike Vick. É bobagem."
+  },
+  {
+    "id": "seg0081",
+    "t_inicio": 365.483,
+    "t_fim": 368.925,
+    "texto_original": "23-yard line. Thickpen goes to work. A quick hitter to Charles.",
+    "traducao_usada": "Thickpen ação! Linha de 23 jardas. Chutinho rápido pra Charles."
+  },
+  {
+    "id": "seg0082",
+    "t_inicio": 369.845,
+    "t_fim": 381.431,
+    "texto_original": "And Jamal Charles breaks into the clear at the He has the speed. Can they catch him? 25-20. dead. Oh, he's tripped up at the 2-yard line by Jeremiah Bell.",
+    "traducao_usada": "Jamal Charles se livra e tá na vantagem, ele tem velocidade. Eles pegam ele? 25-20. Ele caiu no 2 jardas por Jeremiah Bell."
+  },
+  {
+    "id": "seg0083",
+    "t_inicio": 381.971,
+    "t_fim": 384.452,
+    "texto_original": "Bell saves the touchdown. Charles",
+    "traducao_usada": "Bella pega pra cima o touchdown, Charles."
+  },
+  {
+    "id": "seg0084",
+    "t_inicio": 384.932,
+    "t_fim": 388.134,
+    "texto_original": "with one of the longest runs of the season. Let's",
+    "traducao_usada": "com um dos melhores momentos da temporada, vamos ver"
+  },
+  {
+    "id": "seg0085",
+    "t_inicio": 388.174,
+    "t_fim": 393.193,
+    "texto_original": "comment. Oh, what a catch by Evans, and he stays up",
+    "traducao_usada": "Evans deu um ótimo lance e está firme no lance, né?"
+  },
+  {
+    "id": "seg0086",
+    "t_inicio": 393.694,
+    "t_fim": 396.52,
+    "texto_original": "for a couple extra yards. One-handed grab",
+    "traducao_usada": "pra uns poucos metros a mais. Um único soco."
+  },
+  {
+    "id": "seg0087",
+    "t_inicio": 397.001,
+    "t_fim": 399.086,
+    "texto_original": "with Reed Blankenship all over him.",
+    "traducao_usada": "Tá recheado de Reed Blankenship."
+  }
+]

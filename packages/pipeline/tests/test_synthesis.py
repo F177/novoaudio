@@ -67,12 +67,31 @@ def test_inject_pauses_marker_format() -> None:
 
 def test_inject_pauses_multiple_pauses_keep_order() -> None:
     pausas = [
-        InternalPause(after_word_index=0, duration=0.3),
-        InternalPause(after_word_index=2, duration=0.5),
+        InternalPause(after_word_index=0, duration=0.6),
+        InternalPause(after_word_index=2, duration=0.9),
     ]
     translated = "A B C D"
     result = inject_pauses(translated, pausas, original_word_count=4)
-    assert result.index("[pause 0.3s]") < result.index("[pause 0.5s]")
+    assert result.index("[pause 0.6s]") < result.index("[pause 0.9s]")
+
+
+def test_inject_pauses_ignores_pauses_below_significance_threshold() -> None:
+    # Achado real (Avengers, seg0006): marcar pausa curta (respiração
+    # natural) faz o MOSS-TTS tratar como fim de frase — corta a fala em
+    # pedaços cedo demais. Só pausas >= MIN_PAUSE_SECONDS_TO_MARK viram
+    # marcador explícito.
+    pausas = [InternalPause(after_word_index=0, duration=0.3)]
+    result = inject_pauses("Ola mundo", pausas, original_word_count=2)
+    assert "[pause" not in result
+    assert result == "Ola mundo"
+
+
+def test_inject_pauses_custom_threshold() -> None:
+    pausas = [InternalPause(after_word_index=0, duration=0.3)]
+    result = inject_pauses(
+        "Ola mundo", pausas, original_word_count=2, min_pause_seconds_to_mark=0.2
+    )
+    assert "[pause 0.3s]" in result
 
 
 def test_apply_ipa_overrides_replaces_term() -> None:

@@ -135,6 +135,58 @@ def test_pick_best_synthesis_single_candidate() -> None:
     assert pick_best_synthesis("oi", ["oi"]) == 0
 
 
+def test_pick_best_synthesis_prefers_on_duration_over_clean_but_wildly_long() -> None:
+    # Achado real (beast.mp4, seg0009): cand0 tinha texto limpo o bastante
+    # pra passar em _is_bad_synthesis mas saiu 3x mais longo que o alvo
+    # (cauda alucinada); cand1 bateu a duração quase exata. Sem dado de
+    # duração, a versão antiga escolhia cand0 (primeiro "limpo") e estourava
+    # a timeline nos segmentos seguintes — pior que qualquer flag de
+    # conteúdo.
+    reference = "Tchau, galera! Vamos dormir."
+    hypotheses = [
+        "Tchau, galera. Vamos la. Tchau gaia. Tchau gays. Tchau gangues. Tchau guys.",
+        "Tchau, galera! Vamos dormir.",
+    ]
+    winner = pick_best_synthesis(
+        reference,
+        hypotheses,
+        achieved_seconds=[31.52, 10.72],
+        target_seconds=10.27,
+        tolerance=0.08,
+    )
+    assert winner == 1
+
+
+def test_pick_best_synthesis_prefers_on_duration_even_with_suspect_content() -> None:
+    # Nenhum candidato passa em _is_bad_synthesis, mas um bate a duração —
+    # isso ainda vence, porque estourar a timeline é pior que uma flag de
+    # qualidade de conteúdo (ver docstring de pick_best_synthesis).
+    reference = "Eles tinham força pra cima de todos nós juntos."
+    hypotheses = [
+        "Eles tinham forca pra cima de todos nos juntos e mais um pouco de coisa aleatoria a mais.",
+        "Eles tinham forca pra cima de todos nos juntos e mais um pouco de coisa aleatoria a mais.",
+    ]
+    winner = pick_best_synthesis(
+        reference,
+        hypotheses,
+        achieved_seconds=[20.0, 3.0],
+        target_seconds=3.0,
+        tolerance=0.08,
+    )
+    assert winner == 1
+
+
+def test_pick_best_synthesis_without_duration_data_ignores_duration() -> None:
+    # Compatibilidade: sem achieved_seconds/target_seconds, comportamento
+    # idêntico ao antigo (só conteúdo) — quem chama sem esse dado não muda.
+    reference = "se não ficarmos juntos"
+    hypotheses = [
+        "Se não ficarmos juntos, se não ficarmo juntos.",  # repetido
+        "Se não ficarmos juntos,",  # limpo
+    ]
+    assert pick_best_synthesis(reference, hypotheses) == 1
+
+
 def test_save_transcript_and_translation_writes_both_files(tmp_path) -> None:
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()

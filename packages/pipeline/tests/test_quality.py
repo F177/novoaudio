@@ -210,4 +210,7 @@ def test_quality_flags_serializes_to_json() -> None:
         "clipping": True,
         "silencio_anormal": False,
         "locutor_suspeito": False,
+        "entonacao_desalinhada": False,
+        "emocao_incompativel": False,
+        "cer_final_alto": False,
     }

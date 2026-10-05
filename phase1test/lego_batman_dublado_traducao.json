@@ -1,0 +1,233 @@
+[
+  {
+    "id": "seg0000",
+    "t_inicio": 4.98,
+    "t_fim": 9.581,
+    "texto_original": "Computer, how do I put the Joker in Arkham Asylum? Quickest route. No freeways.",
+    "traducao_usada": "Computador, como eu pego o Jocker pra colocar no Asilo de Arkham? O caminho mais rápido, sem autoestradas."
+  },
+  {
+    "id": "seg0001",
+    "t_inicio": 11.322,
+    "t_fim": 12.422,
+    "texto_original": "Computer, do you hear me?",
+    "traducao_usada": "Tá ouvindo eu?"
+  },
+  {
+    "id": "seg0002",
+    "t_inicio": 14.382,
+    "t_fim": 22.904,
+    "texto_original": "Hello, Master Bruce. I have just taken away your computer privileges. Gasp! Sir, it's time for you to stop this unhealthy behavior.",
+    "traducao_usada": "['Mestre Bruce, seus privilégios de computador foram removidos. Ah! Senhor, é hora de parar com esse comportamento danoso.', 49]"
+  },
+  {
+    "id": "seg0003",
+    "t_inicio": 23.584,
+    "t_fim": 27.505,
+    "texto_original": "You can't spend the rest of your life alone, dressed in black, and staying up all night.",
+    "traducao_usada": "Não dá pra passar a vida toda sozinho, de preto, sem dormir à noite."
+  },
+  {
+    "id": "seg0004",
+    "t_inicio": 27.905,
+    "t_fim": 29.986,
+    "texto_original": "Good night, Alfred. Sir, it's morning. Shh!",
+    "traducao_usada": "Boa noite, Alfred. Cê já tá de manhã, né?"
+  },
+  {
+    "id": "seg0005",
+    "t_inicio": 32.299,
+    "t_fim": 37.001,
+    "texto_original": "You need to take responsibility for your life and it starts by raising your son.",
+    "traducao_usada": "Toma conta da tua vida, começa ensinando o teu filho."
+  },
+  {
+    "id": "seg0006",
+    "t_inicio": 37.742,
+    "t_fim": 41.384,
+    "texto_original": "I'm sorry. I literally have no idea what you're talking about.",
+    "traducao_usada": "Desculpa, não tô nem aí pra isso."
+  },
+  {
+    "id": "seg0007",
+    "t_inicio": 41.404,
+    "t_fim": 43.765,
+    "texto_original": "The young orphan you adopted at the gala.",
+    "traducao_usada": "Adotaste aquele órfãozinho no gala"
+  },
+  {
+    "id": "seg0008",
+    "t_inicio": 45.406,
+    "t_fim": 46.947,
+    "texto_original": "I thought I was being sarcastic.",
+    "traducao_usada": "Cê pensou q era sarcasmo?"
+  },
+  {
+    "id": "seg0009",
+    "t_inicio": 47.147,
+    "t_fim": 51.089,
+    "texto_original": "Hello secret camera. What?",
+    "traducao_usada": "Ei câmera escondida, que legal?"
+  },
+  {
+    "id": "seg0010",
+    "t_inicio": 53.007,
+    "t_fim": 57.271,
+    "texto_original": "It's the Batcave! Oh my gosh, oh my gosh, oh my gosh, oh my gosh, oh my gosh, oh my gosh,",
+    "traducao_usada": "É o Batcave! Ô meu Deus, ô meu Deus, ô meu Deus, ô meu Deus, ô meu Deus, ô meu Deus,"
+  },
+  {
+    "id": "seg0011",
+    "t_inicio": 57.811,
+    "t_fim": 60.273,
+    "texto_original": "oh my gosh, oh my...",
+    "traducao_usada": "ahn meu Deus, ahn meu..."
+  },
+  {
+    "id": "seg0012",
+    "t_inicio": 61.334,
+    "t_fim": 63.916,
+    "texto_original": "Batman? Whoa! You're darn right, whoa.",
+    "traducao_usada": "Batman? Você mesmo, tá certo?"
+  },
+  {
+    "id": "seg0013",
+    "t_inicio": 64.156,
+    "t_fim": 66.558,
+    "texto_original": "Wait, does Batman live in Bruce Wayne's basement?",
+    "traducao_usada": "['Pra qual é, o Batman tá no porão do Wayne?']"
+  },
+  {
+    "id": "seg0014",
+    "t_inicio": 66.639,
+    "t_fim": 68.78,
+    "texto_original": "No, Bruce Wayne lives in Batman's attic.",
+    "traducao_usada": "Não, Bruce tá no sótão do Batman."
+  },
+  {
+    "id": "seg0015",
+    "t_inicio": 69.541,
+    "t_fim": 70.722,
+    "texto_original": "Wow, do I get a costume?",
+    "traducao_usada": "Cê tá de fantasia?"
+  },
+  {
+    "id": "seg0016",
+    "t_inicio": 70.942,
+    "t_fim": 74.684,
+    "texto_original": "Don't touch that. the mariachi that",
+    "traducao_usada": "Não toque nisso. aquele mariachi."
+  },
+  {
+    "id": "seg0017",
+    "t_inicio": 74.724,
+    "t_fim": 76.406,
+    "texto_original": "one is culturally insensitive night terror",
+    "traducao_usada": "é uma noitada sem jeito"
+  },
+  {
+    "id": "seg0018",
+    "t_inicio": 76.426,
+    "t_fim": 76.986,
+    "texto_original": "what do we think of this",
+    "traducao_usada": "vai pra onde?"
+  },
+  {
+    "id": "seg0019",
+    "t_inicio": 77.106,
+    "t_fim": 79.048,
+    "texto_original": "glam bat this one absolutely not",
+    "traducao_usada": "esse glambat não tá nem pra brincar"
+  },
+  {
+    "id": "seg0020",
+    "t_inicio": 79.389,
+    "t_fim": 80.89,
+    "texto_original": "wait what's that one there i love it",
+    "traducao_usada": "tá, gosto do esse"
+  },
+  {
+    "id": "seg0021",
+    "t_inicio": 81.271,
+    "t_fim": 83.493,
+    "texto_original": "my only trouble is his pants are just a little tight",
+    "traducao_usada": "tá claro que as calças dele ficam apertadinhas"
+  },
+  {
+    "id": "seg0022",
+    "t_inicio": 83.953,
+    "t_fim": 84.494,
+    "texto_original": "i got an idea",
+    "traducao_usada": "tô com uma ideia"
+  },
+  {
+    "id": "seg0023",
+    "t_inicio": 85.935,
+    "t_fim": 90.38,
+    "texto_original": "it's better now i'm free now i'm moving come on batman let's get grooving",
+    "traducao_usada": "agora tô livre tô movendo vamo Batman vamos dançar"
+  },
+  {
+    "id": "seg0024",
+    "t_inicio": 90.66,
+    "t_fim": 92.202,
+    "texto_original": "i can only look you in the eyes right now",
+    "traducao_usada": "eu só posso te encarar agora"
+  },
+  {
+    "id": "seg0025",
+    "t_inicio": 93.314,
+    "t_fim": 98.416,
+    "texto_original": "Are you ready to follow Batman and maybe learn a few life lessons along the way? I",
+    "traducao_usada": "Pra quem tá preparado, vamos seguir o Batman e aprender com ele, né?"
+  },
+  {
+    "id": "seg0026",
+    "t_inicio": 98.817,
+    "t_fim": 100.958,
+    "texto_original": "sure am. But first, where's the seatbelt?",
+    "traducao_usada": "Tá certo, mas primeiro, onde tá o cinto?"
+  },
+  {
+    "id": "seg0027",
+    "t_inicio": 101.018,
+    "t_fim": 102.298,
+    "texto_original": "The first lesson is",
+    "traducao_usada": "A primeira lição tá"
+  },
+  {
+    "id": "seg0028",
+    "t_inicio": 102.718,
+    "t_fim": 104.319,
+    "texto_original": "life doesn't give you seatbelts.",
+    "traducao_usada": "a vida não te dá cinto."
+  },
+  {
+    "id": "seg0029",
+    "t_inicio": 111.42,
+    "t_fim": 117.084,
+    "texto_original": "Oh, Alfred! I have incredible reflexes.",
+    "traducao_usada": "Ah Alfred, tô com refleto incríveis, né?"
+  },
+  {
+    "id": "seg0030",
+    "t_inicio": 120.747,
+    "t_fim": 123.249,
+    "texto_original": "Oh, oh my goodness. I am so sorry.",
+    "traducao_usada": "Ah, meu Deus. Cê tá muito desculpa."
+  },
+  {
+    "id": "seg0031",
+    "t_inicio": 123.629,
+    "t_fim": 135.017,
+    "texto_original": "Soon as I get back to the Batcave, I will make sure that Alfred puts seatbelts on there. But for the time being, I'm just gonna put my arm right here, and we're just gonna gently ease out of here. Real",
+    "traducao_usada": "Quando eu chegar na Batcaverna, eu garanto que o Alfred vai colocar cintos de segurança. Mas por enquanto, vou pôr o braço aqui e vamos sair devagar devagar."
+  },
+  {
+    "id": "seg0032",
+    "t_inicio": 135.077,
+    "t_fim": 141.883,
+    "texto_original": "gentle-like. Yeah, you know what it is. Everything I do, I do it big.",
+    "traducao_usada": "Tá, você sabe do que tô falando. Tudo que eu faço, eu faço grande."
+  }
+]

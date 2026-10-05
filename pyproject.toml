@@ -32,6 +32,12 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+# report.py é majoritariamente template HTML/CSS/JS embutido em string —
+# quebrar essas linhas em 100 colunas piora a legibilidade em vez de
+# ajudar (não é código Python de verdade sendo formatado).
+[tool.ruff.lint.per-file-ignores]
+"packages/pipeline/report.py" = ["E501"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["packages", "apps", "tests"]

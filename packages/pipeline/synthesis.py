@@ -89,8 +89,28 @@ def duration_to_tokens(target_seconds: float) -> int:
     return max(MIN_SYNTHESIS_TOKENS, round(target_seconds * TOKENS_PER_SECOND))
 
 
+# Achado real 2026-09-19 (Avengers, seg0006, comparação A/B ouvida pelo
+# usuário): marcar TODA pausa detectada (piso de weak_pause_min=0,12s no
+# T0.5) como `[pause X.Ys]` explícito corta a frase em pedaços demais —
+# uma pausa de 0,3s depois de uma única palavra ("Se") fazia o MOSS-TTS
+# tratar aquilo como fim de frase (fala isolada + silêncio abrupto), soando
+# como "a frase termina cedo demais". Comparação direta (mesmo texto,
+# mesmo orçamento de tempo): com as 3 pausas (0,3s/2,1s/0,1s) marcadas,
+# fala cortada em 3 pedaços; só com a pausa grande (2,1s) marcada, fala
+# contínua até um fade natural antes da pausa. `MIN_PAUSE_SECONDS_TO_MARK`
+# separa "pausa dramática real" (vale marcar) de "gap de respiração/
+# transição entre palavras" (deixa a fala fluir, o modelo decide o ritmo
+# sozinho). 0,5s é um valor razoável mas não exaustivamente validado —
+# só testado num exemplo real, não numa amostra grande de segmentos.
+MIN_PAUSE_SECONDS_TO_MARK = 0.5
+
+
 def inject_pauses(
-    translated_text: str, pausas: list[InternalPause], original_word_count: int
+    translated_text: str,
+    pausas: list[InternalPause],
+    original_word_count: int,
+    *,
+    min_pause_seconds_to_mark: float = MIN_PAUSE_SECONDS_TO_MARK,
 ) -> str:
     """Insere `[pause X.Ys]` no texto traduzido, nas posições relativas às
     pausas detectadas no áudio original (T0.5).
@@ -100,8 +120,13 @@ def inject_pauses(
     ocorria no original (ex.: pausa depois de 60% das palavras originais
     vira uma pausa depois de ~60% das palavras traduzidas). É uma
     heurística, não uma garantia de alinhamento perfeito.
+
+    Só marca pausas com pelo menos `min_pause_seconds_to_mark` — pausas
+    menores (respiração natural, transição entre palavras) não viram
+    marcador explícito, ver docstring de `MIN_PAUSE_SECONDS_TO_MARK`.
     """
-    if not pausas or original_word_count <= 0:
+    significant_pausas = [p for p in pausas if p.duration >= min_pause_seconds_to_mark]
+    if not significant_pausas or original_word_count <= 0:
         return translated_text
 
     words = translated_text.split()
@@ -109,7 +134,7 @@ def inject_pauses(
         return translated_text
 
     insertions: list[tuple[int, float]] = []
-    for pause in pausas:
+    for pause in significant_pausas:
         relative_position = (pause.after_word_index + 1) / original_word_count
         target_index = max(0, min(len(words) - 1, round(relative_position * len(words)) - 1))
         insertions.append((target_index, pause.duration))
@@ -152,7 +177,24 @@ def infer_delivery_instruction(text: str) -> str | None:
     tem os dois, e ênfase/urgência (exclamação) é o sinal mais forte dos
     dois pra decidir tom de voz.
 
-    Não validado contra o modelo real ainda — hipótese, não medição.
+    **DESLIGADO em `pod_worker.py::cmd_synthesize` desde 2026-09-19 — achado
+    real, medido, não hipótese.** Validado contra o modelo real: essa
+    instrução de ênfase é a causa raiz confirmada da instabilidade "MOSS-TTS
+    entra em loop" caçada a sessão inteira (ver docs/moss_tts_investigation.md).
+    Experimento controlado (texto real que falhava em produção, 10 amostras
+    por condição): COM a instrução, 10/10 amostras entraram em loop de
+    repetição (9-36s de áudio pra um alvo de 4,6s); SEM a instrução, MESMO
+    texto/orçamento de tokens, 0/10 loop, todas dentro de ±10% do orçamento
+    pedido. O modelo interpreta "fale com ênfase e emoção genuína" como
+    licença pra falar bem mais devagar/expansivo — sob orçamento de duração
+    apertado (comum: segmentos com pontuação de ênfase tendem a ter menos
+    tempo por sílaba, não mais, numa fala natural rápida), isso vira um
+    pedido estruturalmente impossível de caber no tempo, e a instabilidade
+    observada era o modelo reagindo mal a esse pedido impossível — não um
+    bug aleatório do MOSS-TTS. Função mantida (lógica de pontuação
+    continua correta, só a APLICAÇÃO era o problema) pra uma versão futura
+    redesenhada que valide o custo de tempo real antes de aplicar a
+    instrução, em vez de aplicá-la incondicionalmente.
     """
     if "!" in text:
         return "fale com ênfase e emoção genuína, não leia como narração neutra de audiobook"
@@ -211,10 +253,14 @@ def time_stretch_to_duration(
     """Comprime ou estica `audio` (phase vocoder, preserva pitch) pra chegar
     o mais perto possível de `target_seconds`.
 
-    Existe especificamente pro piso de `MIN_SYNTHESIS_TOKENS`: um segmento
-    curto sintetizado no piso sai mais longo que o alvo real, e isso
-    comprime de volta em vez de deixar o segmento estourar a timeline (ver
-    `assembly.py` T0.16) ou tocar mais devagar que devia.
+    Criada pro piso de `MIN_SYNTHESIS_TOKENS` (um segmento curto sintetizado
+    no piso sai mais longo que o alvo real), mas usada por
+    `pod_worker.py::cmd_synthesize` pra QUALQUER segmento que ainda estiver
+    fora da tolerância depois do retry — achado real de 2026-09-18 (vídeo
+    beast.mp4): um segmento bem acima do piso (5,38s de alvo) saiu com 8,0s
+    mesmo depois de ajustar `tokens` no retry, e isso sozinho já estourou a
+    timeline perto do fim do vídeo (`assembly.py` T0.16). Overshoot depois
+    do retry não é exclusivo de segmento no piso.
 
     A razão de compressão/estiramento é limitada a `max_ratio` (default
     `MAX_TIME_STRETCH_RATIO`) — acima disso a fala fica rápida/devagar

@@ -52,6 +52,44 @@ def test_parse_candidates_raises_without_candidates_key() -> None:
         parse_candidates(json.dumps({"outra_coisa": []}))
 
 
+def test_parse_candidates_unwraps_single_element_nested_list() -> None:
+    # Achado real (beast.mp4, 2026-09-18): o Qwen às vezes aninha cada
+    # candidato numa lista de 1 elemento em vez de string solta — e faz
+    # isso de forma repetida/consistente pro mesmo segmento, não por acaso
+    # de amostragem (visto 3 tentativas seguidas com o mesmo padrão).
+    # Aceitar isso cegamente (`str(c)`) mandava o texto literal "['...']"
+    # pro MOSS-TTS sintetizar; rejeitar e torcer pelo retry desperdiçava
+    # tentativas à toa quando o formato é conhecido e recuperável.
+    response = json.dumps({"candidates": [["Oi, tudo bem?"], "Olá."]})
+    assert parse_candidates(response) == ["Oi, tudo bem?", "Olá."]
+
+
+def test_parse_candidates_raises_when_nested_list_is_not_recoverable() -> None:
+    # Lista com mais de 1 item, ou item que não é string — não é o padrão
+    # exato conhecido, continua sendo rejeitado (não tenta adivinhar).
+    response = json.dumps({"candidates": [["Oi.", "Tchau."], "Olá."]})
+    with pytest.raises(ValueError, match="não é uma string"):
+        parse_candidates(response)
+
+
+def test_parse_candidates_ignores_extra_braces_after_the_real_json() -> None:
+    # Achado real: o regex guloso antigo (`\{.*\}` com DOTALL) ia do
+    # primeiro `{` até o ÚLTIMO `}` da resposta inteira — se o LLM
+    # escrevesse qualquer chave extra depois do JSON de verdade (exemplo,
+    # rascunho, nota), o match antigo engolia tudo junto. A extração por
+    # contagem de chaves para no par certo do primeiro `{`.
+    response = (
+        '{"candidates": ["Oi.", "Ola."]}\n'
+        'Nota: o formato de exemplo seria algo como {"candidates": ["exemplo"]}'
+    )
+    assert parse_candidates(response) == ["Oi.", "Ola."]
+
+
+def test_parse_candidates_raises_on_unclosed_json() -> None:
+    with pytest.raises(ValueError, match="incompleto"):
+        parse_candidates('{"candidates": ["Oi.", "trunc')
+
+
 def test_score_candidate_prefers_matching_budget() -> None:
     exact = score_candidate(
         "Uma frase com doze silabas mais ou menos aqui", target_syllables=12, source_text=""

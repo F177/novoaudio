@@ -1,0 +1,79 @@
+[
+  {
+    "id": "seg0000",
+    "t_inicio": 20.37,
+    "t_fim": 23.533,
+    "texto_original": "should be faced with an unthinkable decision.",
+    "traducao_usada": "tô diante de uma escolha impossível, né?"
+  },
+  {
+    "id": "seg0001",
+    "t_inicio": 31.319,
+    "t_fim": 40.187,
+    "texto_original": "I've fought with many warriors in my time. They were far stronger than all of us put together.",
+    "traducao_usada": "Eu lutei com muitos guerreiros na minha vida. Eles eram bem mais fortes do que somos juntos."
+  },
+  {
+    "id": "seg0002",
+    "t_inicio": 40.868,
+    "t_fim": 45.512,
+    "texto_original": "And they died. They died facing enemies",
+    "traducao_usada": "Cê morreu enfrentando inimigos, né?"
+  },
+  {
+    "id": "seg0003",
+    "t_inicio": 47.393,
+    "t_fim": 52.757,
+    "texto_original": "and threats. It scared me far less than this one.",
+    "traducao_usada": "e ameaças. Isso me assustou menos, tá."
+  },
+  {
+    "id": "seg0004",
+    "t_inicio": 62.201,
+    "t_fim": 64.282,
+    "texto_original": "Everything that they sacrifice will be for nothing",
+    "traducao_usada": "Tudo que eles sacrifício vai ser pra nada"
+  },
+  {
+    "id": "seg0005",
+    "t_inicio": 65.622,
+    "t_fim": 67.063,
+    "texto_original": "if we do not stand together.",
+    "traducao_usada": "se não nos apoiamo'"
+  },
+  {
+    "id": "seg0006",
+    "t_inicio": 70.464,
+    "t_fim": 72.225,
+    "texto_original": "Put aside your petty squabbles. I",
+    "traducao_usada": "Ignora esses babados, eu."
+  },
+  {
+    "id": "seg0007",
+    "t_inicio": 75.926,
+    "t_fim": 77.427,
+    "texto_original": "presume nothing except this.",
+    "traducao_usada": "põe só isso na cabeça, tá?"
+  },
+  {
+    "id": "seg0008",
+    "t_inicio": 79.088,
+    "t_fim": 84.392,
+    "texto_original": "If you return, you will return as brothers and sisters.",
+    "traducao_usada": "Volta e tá de volta cê irmão e irmã"
+  },
+  {
+    "id": "seg0009",
+    "t_inicio": 91.958,
+    "t_fim": 92.859,
+    "texto_original": "But mark my words.",
+    "traducao_usada": "Marque bem minhas palavras."
+  },
+  {
+    "id": "seg0010",
+    "t_inicio": 100.645,
+    "t_fim": 102.627,
+    "texto_original": "We're going to need a miracle.",
+    "traducao_usada": "Tá precisando de um milagre?"
+  }
+]

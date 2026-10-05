@@ -69,6 +69,13 @@ _DEFAULT_LD_LIBRARY_PATH_ASR = (
     "/root/venvs/asr/lib/python3.11/site-packages/nvidia/cublas/lib"
 )
 _DEFAULT_VOICE_REFERENCE = "voices/default_pt_br.wav"
+# Achado real 2026-09-25: um Pod novo (GPU Blackwell) não tinha volume de
+# rede nenhum — sem `/workspace` de jeito nenhum, nem vazio. O default
+# antigo assumia que todo Pod tem `/workspace` (verdade em todos os Pods
+# anteriores desta sessão, mas não é garantido). Configurável agora;
+# default mantido igual pra não quebrar Pods já configurados com
+# POD_HF_HOME apontando pro de sempre.
+_DEFAULT_HF_HOME = "/workspace/hf_cache"
 
 
 @dataclass
@@ -84,6 +91,7 @@ class PodConfig:
     voice_reference: str
     lora_adapter_path: str | None
     audio_tokenizer_device: str
+    hf_home: str
 
     @classmethod
     def from_env(cls) -> PodConfig:
@@ -110,6 +118,7 @@ class PodConfig:
             voice_reference=os.environ.get("POD_VOICE_REFERENCE", _DEFAULT_VOICE_REFERENCE),
             lora_adapter_path=os.environ.get("POD_LORA_ADAPTER_PATH") or None,
             audio_tokenizer_device=os.environ.get("POD_AUDIO_TOKENIZER_DEVICE", "cuda"),
+            hf_home=os.environ.get("POD_HF_HOME", _DEFAULT_HF_HOME),
         )
 
 

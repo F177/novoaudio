@@ -249,6 +249,90 @@ def locutor_suspeito(
     return speaker_similarity < threshold
 
 
+# Achado real 2026-09-26: o usuário pediu uma avaliação automática de
+# "entonação", não só ouvido. Em vez de um modelo de emoção (categoria
+# "raiva"/"alegria"), a versão barata e sem modelo novo é comparar
+# diretamente os contornos de energia/pitch que `prosody.py` já extrai
+# (mesmo dado usado pra TRANSFERIR prosódia agora vira métrica de
+# avaliação também) — correlação de Pearson entre o contorno do original e
+# o do dublado. Limiar ainda não medido em produção (não temos volume de
+# dado real anotado por humano pra calibrar) — ponto de partida como os
+# outros limiares deste módulo.
+PROSODY_CORRELATION_THRESHOLD = 0.3
+
+
+def prosody_correlation(source_contour: np.ndarray, dub_contour: np.ndarray) -> float:
+    """Correlação de Pearson entre dois contornos JÁ do mesmo tamanho
+    (energia OU pitch relativo, mesmo formato de `packages.pipeline.prosody`)
+    — mede se a entonação/energia do áudio dublado acompanha a forma do
+    original, número objetivo em vez de impressão de ouvido.
+
+    1.0 = contornos com a mesma forma; 0.0 = sem relação linear; -1.0 =
+    forma invertida. Contorno sem nenhuma variação (todo constante, ex.:
+    segmento sem fala vozeada detectada) não tem correlação definida
+    (desvio padrão zero) — devolve 0.0 nesse caso, não NaN: não há
+    contorno de verdade pra comparar, mas isso não é evidência de
+    desalinhamento, é ausência de sinal.
+    """
+    if len(source_contour) != len(dub_contour):
+        raise ValueError(
+            "os dois contornos precisam ter o mesmo tamanho — resample "
+            "(ver prosody.resample_envelope) antes de comparar"
+        )
+    if len(source_contour) < 2:
+        return 0.0
+    if np.std(source_contour) == 0 or np.std(dub_contour) == 0:
+        return 0.0
+    return float(np.corrcoef(source_contour, dub_contour)[0, 1])
+
+
+def entonacao_desalinhada(
+    correlation: float, threshold: float = PROSODY_CORRELATION_THRESHOLD
+) -> bool:
+    """Correlação de prosódia (energia ou pitch) abaixo do limiar."""
+    return correlation < threshold
+
+
+# Achado real 2026-09-26, item 4 do plano de avaliação de qualidade pedido
+# pelo usuário: emoção da entrega (raiva, alegria, neutro...) não é
+# capturada por CER nem pela correlação de contorno de energia/pitch acima
+# — dois áudios podem ter volume/entonação parecidos e ainda soar
+# emocionalmente errados (ex.: original irritado, dublado neutro).
+# `emotion2vec` (ACL 2024, `iic/emotion2vec_plus_large` via FunASR) roda no
+# Pod (ver `scripts/pod_worker.py::cmd_match_emotion`) e devolve um vetor
+# de scores por classe de emoção para um trecho de áudio; a comparação em
+# si (esta função) é pura — só similaridade de cosseno entre dois vetores
+# já calculados, mesmo padrão de `traducao_infiel`/`locutor_suspeito`
+# (modelo fora deste módulo, limiar aqui).
+EMOTION_SIMILARITY_THRESHOLD = 0.5  # ponto de partida, não calibrado
+
+
+def emotion_similarity(source_scores: np.ndarray, dub_scores: np.ndarray) -> float:
+    """Similaridade de cosseno entre dois vetores de score de emoção (mesma
+    ordem de classes nos dois, ver `cmd_match_emotion`) — 1.0 = mesma
+    distribuição emocional, 0.0 = ortogonal, -1.0 = oposta.
+
+    Vetor nulo (score zero em toda classe — não deveria acontecer com o
+    modelo real, mas pode acontecer em teste sintético) devolve 0.0 em vez
+    de NaN: sem sinal de emoção pra comparar não é evidência de
+    incompatibilidade.
+    """
+    if len(source_scores) != len(dub_scores):
+        raise ValueError("os dois vetores de score precisam ter a mesma ordem de classes")
+    source_norm = np.linalg.norm(source_scores)
+    dub_norm = np.linalg.norm(dub_scores)
+    if source_norm == 0 or dub_norm == 0:
+        return 0.0
+    return float(np.dot(source_scores, dub_scores) / (source_norm * dub_norm))
+
+
+def emocao_incompativel(
+    similarity: float, threshold: float = EMOTION_SIMILARITY_THRESHOLD
+) -> bool:
+    """Similaridade de emoção (fonte vs. dublado) abaixo do limiar."""
+    return similarity < threshold
+
+
 @dataclass
 class QualityFlags:
     fora_duracao: bool
@@ -258,6 +342,9 @@ class QualityFlags:
     clipping: bool
     silencio_anormal: bool
     locutor_suspeito: bool
+    entonacao_desalinhada: bool = False
+    emocao_incompativel: bool = False
+    cer_final_alto: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

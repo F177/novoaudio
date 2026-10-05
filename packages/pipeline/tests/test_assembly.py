@@ -76,14 +76,16 @@ def test_place_segments_on_timeline_ignores_segment_starting_after_end() -> None
     # T0.16: critério de aceite explícito — um segmento que estoura o fim
     # da timeline é REPORTADO (discarded_samples > 0), não silenciosamente
     # ignorado. Ficando acima do limiar, levanta TimelineOverflowError.
-    segments = [TimedAudio(start_seconds=10.0, audio=_tone(1.0))]
+    segments = [TimedAudio(start_seconds=10.0, audio=_tone(3.0))]
     with pytest.raises(TimelineOverflowError):
         place_segments_on_timeline(segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE)
 
 
 def test_place_segments_on_timeline_raises_above_discard_threshold() -> None:
-    # Um segmento inteiro (1s) descartado é bug, não arredondamento.
-    segments = [TimedAudio(start_seconds=4.9, audio=_tone(1.0))]
+    # 3s inteiros descartados é bem acima do piso legítimo (2,5s, ver
+    # docstring de MAX_DISCARDED_SECONDS) — sinal de bug, não caso do
+    # último segmento curto colado no fim do vídeo.
+    segments = [TimedAudio(start_seconds=4.9, audio=_tone(3.0))]
     with pytest.raises(TimelineOverflowError):
         place_segments_on_timeline(segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE)
 
@@ -124,16 +126,93 @@ def test_mix_with_background_handles_small_length_mismatch() -> None:
 
 
 def test_mix_with_background_raises_above_discard_threshold() -> None:
-    # T0.16: meio segundo (aqui, mais) de diferença entre vocais e fundo é
-    # sinal de fontes diferentes, não arredondamento — deve falhar alto.
-    vocals = np.zeros(int(3.0 * SAMPLE_RATE), dtype=np.float32)
-    background = np.zeros(int(2.0 * SAMPLE_RATE), dtype=np.float32)
+    # T0.16: diferença bem acima do piso legítimo (2,5s) entre vocais e
+    # fundo é sinal de fontes diferentes, não arredondamento — deve falhar alto.
+    vocals = np.zeros(int(4.0 * SAMPLE_RATE), dtype=np.float32)
+    background = np.zeros(int(1.0 * SAMPLE_RATE), dtype=np.float32)
     with pytest.raises(TimelineOverflowError):
         mix_with_background(vocals, background, SAMPLE_RATE)
 
 
 def test_mix_with_background_default_threshold_matches_module_constant() -> None:
     assert MAX_DISCARDED_SECONDS == pytest.approx(0.5)
+
+
+def test_place_segments_on_timeline_allows_single_segment_at_floor_cap() -> None:
+    # Caso legítimo real (beast.mp4): só o último segmento do vídeo, curto,
+    # descartando até o teto físico (piso do MOSS-TTS / razão máxima de
+    # compressão) não é bug — não deve levantar mesmo passando dos 0.5s
+    # agregados.
+    from packages.pipeline.assembly import MAX_SINGLE_SEGMENT_DISCARD_SECONDS
+
+    audio_seconds = MAX_SINGLE_SEGMENT_DISCARD_SECONDS - 0.05
+    segments = [TimedAudio(start_seconds=5.0, audio=_tone(audio_seconds))]
+    result = place_segments_on_timeline(
+        segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
+    )
+    assert result.discarded_samples == int(round(audio_seconds * SAMPLE_RATE))
+
+
+def test_place_segments_on_timeline_raises_when_single_segment_exceeds_floor_cap() -> None:
+    from packages.pipeline.assembly import MAX_SINGLE_SEGMENT_DISCARD_SECONDS
+
+    audio_seconds = MAX_SINGLE_SEGMENT_DISCARD_SECONDS + 1.0
+    segments = [TimedAudio(start_seconds=5.0, audio=_tone(audio_seconds))]
+    with pytest.raises(TimelineOverflowError):
+        place_segments_on_timeline(segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE)
+
+
+def test_place_segments_on_timeline_clips_segment_that_overlaps_next_one() -> None:
+    # Achado real e sério (beast.mp4, N_CANDIDATES=5): um segmento cuja
+    # síntese saiu bem mais longa que o espaço até o PRÓXIMO segmento
+    # começar se sobrepunha silenciosamente a ele (áudio somado, sem erro,
+    # sem flag) — a verificação antiga só olhava o fim do VÍDEO, nunca o
+    # próximo segmento. Agora corta no que vier primeiro.
+    long_tone = _tone(3.0, amplitude=0.9)  # bem mais longo que o 1.0s de espaço até o próximo
+    next_tone = _tone(0.5, amplitude=0.3, freq=880.0)
+    segments = [
+        TimedAudio(start_seconds=0.0, audio=long_tone),
+        TimedAudio(start_seconds=1.0, audio=next_tone),
+    ]
+    result = place_segments_on_timeline(
+        segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
+    )
+    next_start = int(1.0 * SAMPLE_RATE)
+    # o primeiro segmento não pode ter vazado pro espaço do segundo
+    assert np.allclose(result.timeline[next_start : next_start + len(next_tone)], next_tone)
+    assert result.discarded_samples == len(long_tone) - int(1.0 * SAMPLE_RATE)
+
+
+def test_place_segments_on_timeline_no_overlap_when_segments_fit() -> None:
+    # Caso normal (a maioria): segmentos com espaço de sobra até o
+    # próximo — nada é cortado.
+    segments = [
+        TimedAudio(start_seconds=0.0, audio=_tone(0.5)),
+        TimedAudio(start_seconds=2.0, audio=_tone(0.5)),
+    ]
+    result = place_segments_on_timeline(
+        segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
+    )
+    assert result.discarded_samples == 0
+
+
+def test_place_segments_on_timeline_raises_when_discard_spread_across_segments() -> None:
+    # Achado apontado pelo usuário: um threshold agregado alto esconderia
+    # bug real espalhado por VÁRIOS segmentos, mesmo com cada um pequeno
+    # (bem abaixo do teto físico de 1 segmento sozinho no piso). O caso
+    # legítimo só pode acontecer com 1 segmento (o mais próximo do fim do
+    # vídeo) — descarte em 3 segmentos diferentes é sinal de bug (ex.:
+    # `total_duration_seconds` medido errado), mesmo que cada um pareça
+    # pequeno isoladamente.
+    segments = [
+        TimedAudio(start_seconds=4.5, audio=_tone(1.0)),  # descarta 0.5s
+        TimedAudio(start_seconds=6.0, audio=_tone(1.0)),  # começa após o fim, descarta 1.0s
+        TimedAudio(start_seconds=7.0, audio=_tone(1.0)),  # começa após o fim, descarta 1.0s
+    ]
+    with pytest.raises(TimelineOverflowError):
+        place_segments_on_timeline(
+            segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
+        )
 
 
 def test_has_clipping_detects_over_threshold() -> None:

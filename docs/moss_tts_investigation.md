@@ -366,6 +366,19 @@ energia/pitch do áudio original (stem de voz já separado pelo Demucs) e
 mapear pra `instruction` ou pra pós-processar o volume do segmento
 sintetizado seguindo o contorno original.
 
+### 2026-09-18 — naturalidade: validado contra o modelo real (não só sintético)
+
+As duas correções de 2026-09-15 (`expressiveness_score` na tradução,
+`infer_delivery_instruction` na síntese) tinham só teste unitário com
+dado sintético — nunca tinham rodado contra o MOSS-TTS de verdade.
+Testado agora com 3 jobs curtos (texto neutro, com "!", com "?") direto
+via `pod_worker.py synthesize`: os 3 rodaram sem erro, todos dentro da
+tolerância de duração. Confirma que passar `instruction` pro
+`processor.build_user_message` não quebra o `generate()` real (a única
+coisa que era, de fato, incerta sem GPU — a lógica de seleção de texto
+já estava testada). **Ainda não confirmado por ouvido humano se o tom
+realmente muda** — isso não dá pra validar sem alguém ouvir o áudio.
+
 ### 2026-09-18 — Pod novo (3º da sessão), rebuild validado, achado novo de torchcodec
 
 Gap de sessão de alguns dias; Pod anterior fechado pelo usuário. Toda vez
@@ -393,6 +406,152 @@ disparou como esperado (`tokens_used=40` = piso, `attempts=2`,
 `stretched=true`, `within_tolerance=true` nos 3 candidatos). Ambiente
 confirmado pronto para retomar o trabalho pendente (F1, validação das
 duas correções de naturalidade contra o modelo real, etc.).
+
+### 2026-09-18 — sessão de "empurrar pra perto de 100%": achados reais, um sério
+
+Usuário pediu pra investigar/testar de verdade em cima do resultado do
+beast.mp4 (63,2% dos segmentos com alguma flag), pensando fora da caixa,
+e alertou explicitamente: qualquer constante calibrada num único vídeo de
+teste pode não generalizar pro público geral (todo tipo de vídeo).
+
+1. **N_CANDIDATES 3→5** (`pod_worker.py`): mudança de baixo risco (mais
+   amostra independente só ajuda), pedida e testada primeiro.
+
+2. **Erro de design corrigido, apontado pelo usuário**: a primeira reação
+   ao achar o caso legítimo de overflow (último segmento curto colado no
+   fim do vídeo) foi subir `assembly.MAX_DISCARDED_SECONDS` de 0,5s pra
+   2,5s no agregado. Isso esconderia bug real espalhado por vários
+   segmentos pequenos (ex.: 3 segmentos com 0,8s de erro cada). Corrigido
+   pra dois gates ortogonais: teto por segmento individual (derivado do
+   piso físico do modelo, `MIN_SYNTHESIS_SECONDS/MAX_TIME_STRETCH_RATIO`),
+   e no máximo 1 segmento pode ter qualquer descarte — o caso legítimo só
+   pode afetar um. Ver `[[feedback_generalize_constants]]` na memória.
+
+3. **`segmentation.py` ganhou o piso real de síntese**: `dub.py` agora
+   chama `segment_words(words, min_duration=MIN_SYNTHESIS_SECONDS)` em vez
+   do default antigo (0,3s) — os dois valores tinham ficado fora de
+   sincronia desde que o piso foi medido (T0.9). Elimina os `fora_duracao`
+   estruturais (segmento curto que nunca cabe no piso do MOSS-TTS, não
+   importa o candidato).
+
+4. **Achado sério: bug de parsing de tradução, não instabilidade do
+   MOSS-TTS.** Testando com 5 candidatos + segmentos maiores (efeito do
+   merge do item 3), 4 segmentos saíram com TODOS os 5 candidatos de
+   síntese consistentemente ~1,9-2,3x mais longos que o alvo — parecia
+   instabilidade do modelo, mas tinha variância baixa demais pra ser
+   estocástico. Investigando a tradução: `parse_candidates()` fazia
+   `str(c) for c in candidates` sem checar o tipo — quando o Qwen aninhava
+   cada candidato numa lista de 1 elemento (`[["texto"]]` em vez de
+   `["texto"]`), isso virava o texto LITERAL `"['texto']"` sendo mandado
+   pro MOSS-TTS sintetizar (colchetes, aspas, e às vezes cortado no meio
+   da palavra). O MOSS-TTS não tinha culpa nenhuma — estava sintetizando
+   lixo de entrada corretamente. Corrigido: `parse_candidates` agora
+   valida que cada candidato é `str` antes de aceitar (levanta `ValueError`
+   se não for, o retry existente em `cmd_translate` resolve reamostrando).
+   De brinde, trocado o regex guloso `\{.*\}` (que pega do primeiro `{` até
+   o ÚLTIMO `}` da resposta inteira, vulnerável a qualquer chave extra
+   depois do JSON de verdade) por uma extração por contagem de chaves, que
+   para no par certo do primeiro `{`.
+
+   **Lição maior que a correção em si**: um sintoma que parece
+   "instabilidade estocástica do modelo de voz" pode ser, na real, um bug
+   de parsing silencioso rio acima — vale sempre checar o TEXTO de entrada
+   antes de suspeitar do modelo, especialmente quando o padrão é
+   consistente demais pra ser aleatório (todos os 5 candidatos concordando
+   de perto não é cara de estocástico).
+
+5. **Overlap entre segmentos na timeline, nunca detectado antes**:
+   `place_segments_on_timeline` só verificava estouro no FIM do vídeo;
+   nunca verificava se a síntese de um segmento (mais longa que o
+   esperado) invadia o espaço do PRÓXIMO segmento. No caso real do item 4
+   (antes do fix), um segmento de 10,3s saiu com 52,9s e teria se
+   sobreposto a CINCO segmentos seguintes — silenciosamente, sem erro, sem
+   flag, corrompendo quase metade do vídeo com áudio somado/ininteligível.
+   Corrigido: cada segmento agora é cortado no que vier primeiro (início
+   do próximo segmento ou fim do vídeo), sujeito aos mesmos dois gates do
+   item 2. Validado em produção nesta mesma sessão: com o bug de tradução
+   ainda ativo, esse gate disparou corretamente (`TimelineOverflowError`,
+   46,4s descartados em 6 segmentos) em vez de deixar passar áudio
+   corrompido — a rede de segurança funcionou exatamente como desenhada.
+
+### 2026-09-19 — causa raiz real do "MOSS-TTS instável" achada e corrigida
+
+Pedido explícito do usuário: parar de contornar e achar a causa raiz de
+verdade do bug de repetição/instabilidade, essencial pra produção. Sessão
+de investigação controlada direto no Pod, lendo o `generate()` real do
+modelo (`modeling_moss_tts.py`, baixado e lido por completo) em vez de só
+tentar parâmetros às cegas.
+
+**Mecanismo real do "loop"**: o modelo só para quando amostra
+`im_end_token_id` no canal de texto (canal 0). Esse canal é amostrado com
+`text_temperature=1.5` por padrão, independente de `audio_temperature=1.7`
+(controla o conteúdo/voz). `im_end_token_id` fica banido de amostragem nos
+primeiros `n_vq` (32) passos — daí o piso de duração já conhecido.
+
+**Hipótese 1 (testada, refutada): temperatura da decisão de parar.**
+Isolei `text_temperature` de `audio_temperature` (nunca tinha sido testado
+separado antes, achados anteriores só mexiam nos dois juntos ou em
+parâmetros de áudio). Resultado no texto real que falhava em produção
+(seg0011, beast.mp4, 10 amostras por condição):
+- Padrão (text_temp=1,5): 10/10 loop, 9,3-36,5s pra alvo de 4,6s.
+- text_temp=0,5: 10/10 loop, PIOR (até 79,4s).
+- text_temp=0 (greedy): 10/10 loop, AINDA PIOR (6/10 bateram exatamente no
+  teto de 1024 passos = 79,36s).
+
+Conclusão: baixar a temperatura da decisão de parar piora, não ajuda — o
+argmax do modelo nesse ponto genuinamente "quer" continuar, então tirar a
+aleatoriedade só remove a única chance de escapar por sorte.
+
+**Hipótese 2 (testada, parcialmente confirmada): orçamento de tokens
+impossível.** O job real usava `tokens=40` (piso, depois do retry ter
+encolhido de 57 pra 40 baseado numa tentativa 1 que provavelmente já
+tinha alucinado). Testei o MESMO texto com tokens=40 vs 57 vs 100:
+- tokens=40: 10/10 "loop" (>1,5x alvo), 9,3-36,5s — variância enorme.
+- tokens=57: 7/10 "loop", mas MUITO mais estável (6,1-10,2s).
+- tokens=100 (~8s): 10/10 tecnicamente ">1,5x" do alvo de 4,6s, mas
+  variância baixíssima (7,7-11,5s) — não é mais "loop" instável, é o
+  modelo convergindo pra uma duração natural PRÓPRIA dele pro texto, que
+  não muda muito com o orçamento pedido.
+
+Achado: o modelo parece ter uma duração "natural" pra esse texto
+(~7-10s) bem acima do orçamento pedido (3,2-4,6s) — mais tokens não
+"conserta" a duração, só estabiliza a variância. Isso apontou pra: por
+que o texto "quer" 7-10s pra um orçamento calibrado pra ~4,6s?
+
+**Hipótese 3 (testada, CONFIRMADA — causa raiz real):
+`infer_delivery_instruction`.** Os 2 casos catastróficos reais da sessão
+(seg0006, seg0011) tinham em comum texto cheio de "!", disparando a
+instrução "fale com ênfase e emoção genuína, não leia como narração
+neutra de audiobook" (adicionada em 2026-09-15, T0.12c, explicitamente
+marcada como "não validada contra o modelo real ainda"). Teste direto,
+mesmo texto/tokens=40, só removendo a instrução:
+- COM instrução: 10/10 loop, 9,3-36,5s.
+- SEM instrução: **0/10 loop**, todas as 10 amostras em 2,88-3,44s — quase
+  exatamente o orçamento pedido (3,2s nominal pra tokens=40).
+
+Resultado limpo e 100% reprodutível. O modelo interpreta "fale com ênfase
+e emoção genuína" como licença pra falar bem mais devagar/expansivo — sob
+orçamento apertado (comum: frases de ênfase tendem a ser ditas mais
+rápido na fala real, não mais devagar), isso vira um pedido
+estruturalmente impossível de caber no tempo, e a "instabilidade do
+MOSS-TTS" caçada a sessão inteira era o modelo reagindo mal a um pedido
+impossível — não um bug aleatório do modelo em si.
+
+**Correção aplicada**: `pod_worker.py::cmd_synthesize` não chama mais
+`infer_delivery_instruction` (`instruction = None` sempre, com comentário
+explicando o achado). A função continua existindo e testada em
+`synthesis.py` (a lógica de detecção de pontuação está correta, só a
+APLICAÇÃO incondicional era o problema) — uma versão futura pode
+redesenhar isso validando o custo de tempo real antes de aplicar
+qualquer instrução de estilo, em vez de aplicar sempre que houver "!"/"?".
+
+**Nota**: as duas outras correções desta sessão (compressão universal
+pós-retry, escalação de candidatos extra) continuam válidas e úteis —
+ajudam em casos de instabilidade genuína do modelo (rara, documentada
+pelo SGLang) que não têm a ver com a instrução de ênfase. A diferença é
+que agora sabemos que a MAIORIA dos casos catastróficos observados nesta
+sessão tinha uma causa raiz identificável e corrigível, não eram só "sorte
+ruim" do modelo.
 
 ## Decisão (2026-09-14, confirmada explicitamente com o usuário)
 

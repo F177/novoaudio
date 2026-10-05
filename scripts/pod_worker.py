@@ -18,6 +18,7 @@ Uso:
     python pod_worker.py translate --input jobs.json --output candidates.json
     python pod_worker.py synthesize --input jobs.json --out-dir synth/
     python pod_worker.py evaluate --input jobs.json --output eval.json
+    python pod_worker.py match_emotion --input jobs.json --output emotion.json
 """
 
 from __future__ import annotations
@@ -44,13 +45,31 @@ def cmd_separate_stems(args: argparse.Namespace) -> None:
     )
 
 
-def _patch_torchaudio_backend_shim() -> None:
+def _patch_torch_compat_shims() -> None:
     """pyannote.audio==3.1.1 (pinado transitivamente pelo whisperx 3.2.0) usa a
     API antiga de backend do torchaudio, removida em versões novas. Chamar
     antes de qualquer `import whisperx` (mesmo shim de `runpod/transcribe/_compat.py`,
     duplicado aqui pra este script não depender de um pacote local chamado
     `runpod`, que colidiria com o SDK `runpod` instalado via pip).
+
+    Achado real 2026-09-25 (Pod Blackwell, torch/torchaudio forçado pra
+    2.9.1+cu128 — só essa versão tem kernel pra sm_120): torchaudio 2.9.1 não
+    só depreciou `get_audio_backend`/`set_audio_backend`/`list_audio_backends`
+    (torchaudio 2.2.2 antigo só avisava) — removeu o MÓDULO
+    `torchaudio.backend` inteiro E a classe `torchaudio.AudioMetaData` (não
+    só moveu de lugar, sumiu de verdade). `pyannote.audio` usa
+    `torchaudio.AudioMetaData` como type hint em `core/io.py` (avaliado na
+    hora de importar, não só documentação) e `from torchaudio.backend.common
+    import AudioMetaData` em `tasks/segmentation/mixins.py`. Sem essas duas
+    coisas existirem, o import quebra antes mesmo de tentar rodar nada.
+    Recria um `AudioMetaData` mínimo (mesmos campos da classe real, já
+    estável há várias versões) e um módulo `torchaudio.backend.common` falso
+    apontando pra ele — suficiente pro import e pro uso que pyannote faz.
     """
+    import dataclasses
+    import sys
+    import types
+
     import torchaudio
 
     if not hasattr(torchaudio, "get_audio_backend"):
@@ -60,9 +79,58 @@ def _patch_torchaudio_backend_shim() -> None:
     if not hasattr(torchaudio, "list_audio_backends"):
         torchaudio.list_audio_backends = lambda: ["soundfile"]
 
+    if not hasattr(torchaudio, "AudioMetaData"):
+
+        @dataclasses.dataclass
+        class AudioMetaData:
+            sample_rate: int
+            num_frames: int
+            num_channels: int
+            bits_per_sample: int = 16
+            encoding: str = "PCM_S"
+
+        torchaudio.AudioMetaData = AudioMetaData
+
+    if not hasattr(torchaudio, "backend"):
+        backend_module = types.ModuleType("torchaudio.backend")
+        common_module = types.ModuleType("torchaudio.backend.common")
+        common_module.AudioMetaData = torchaudio.AudioMetaData
+        backend_module.common = common_module
+        torchaudio.backend = backend_module
+        sys.modules["torchaudio.backend"] = backend_module
+        sys.modules["torchaudio.backend.common"] = common_module
+
+    # Achado real 2026-09-25, mesmo Pod: torch 2.6+ mudou o default de
+    # `torch.load` pra `weights_only=True` (segurança). O checkpoint do
+    # pyannote (carregado via `lightning_fabric.utilities.cloud_io`) tem
+    # objetos customizados (`torch.torch_version.TorchVersion`,
+    # `pyannote.audio.core.task.Specifications`, e provavelmente mais —
+    # foram aparecendo um de cada vez ao permitir na lista manualmente) que
+    # não estão na lista segura por padrão. Em vez de alistar cada classe
+    # (lightning_fabric passa `weights_only=True` explicitamente, então só
+    # dar allowlist não bastava — via `add_safe_globals` sozinho não
+    # resolveu), força `weights_only=False` pra qualquer `torch.load`
+    # depois deste ponto — aceitável aqui porque são checkpoints oficiais
+    # do HuggingFace (pyannote, whisperx), não arquivo de origem
+    # desconhecida.
+    import functools
+
+    import torch
+
+    if not getattr(torch.load, "_novoaudio_patched", False):
+        _original_torch_load = torch.load
+
+        @functools.wraps(_original_torch_load)
+        def _torch_load_trusted_default(*args, **kwargs):
+            kwargs["weights_only"] = False
+            return _original_torch_load(*args, **kwargs)
+
+        _torch_load_trusted_default._novoaudio_patched = True
+        torch.load = _torch_load_trusted_default
+
 
 def cmd_transcribe(args: argparse.Namespace) -> None:
-    _patch_torchaudio_backend_shim()
+    _patch_torch_compat_shims()
     import whisperx
     from whisperx.diarize import DiarizationPipeline
 
@@ -100,9 +168,30 @@ def cmd_translate(args: argparse.Namespace) -> None:
     model_id = "Qwen/Qwen2.5-7B-Instruct"
     device = "cuda"
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    # Geração em lote de um causal LM precisa de padding à esquerda (alinha
+    # o FIM de todos os prompts na mesma posição, senão cada linha começaria
+    # a gerar num índice diferente) e de um pad_token (Qwen não define um
+    # por padrão).
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
         model_id, torch_dtype=torch.bfloat16, device_map=device
     )
+
+    # Achado real 2026-09-18 (pedido explícito do usuário: reduzir tempo de
+    # ponta a ponta sem perder qualidade): `cmd_translate` fazia 1 chamada
+    # de `generate()` POR SEGMENTO, serial — para um vídeo com 90+
+    # segmentos, isso paga o overhead de forward-pass do zero 90 vezes,
+    # mesmo achado de T0.14b (gerar em lote custa quase o mesmo tempo de
+    # GPU que gerar 1) nunca tinha sido aplicado ENTRE segmentos, só entre
+    # candidatos do mesmo segmento (`cmd_synthesize`). Agora processa em
+    # lotes de até `TRANSLATE_BATCH_SIZE` segmentos por chamada. Lote
+    # limitado (não "todos de uma vez") de propósito — sem medição real de
+    # uso de memória num vídeo de 90+ segmentos com prompts longos, um lote
+    # sem limite arrisca CUDA OOM; 16 é uma margem de segurança, não medida
+    # no limite.
+    TRANSLATE_BATCH_SIZE = 16
 
     # Qwen às vezes não devolve JSON válido (achado real, 2x em bateladas de
     # 90+ segmentos) — sem retry, 1 job ruim derrubava a tradução inteira do
@@ -110,37 +199,54 @@ def cmd_translate(args: argparse.Namespace) -> None:
     # geração é `do_sample=True`, então tentar de novo é uma chance real de
     # sucesso, não repetir o mesmo erro) até MAX_TRANSLATE_ATTEMPTS; se nunca
     # conseguir, esse UM segmento fica sem candidatos (dub.py cai pro texto
-    # original em inglês) em vez de travar os outros 89.
+    # original em inglês) em vez de travar os outros 89. Só os jobs que
+    # falharem são reenviados no próximo round — o lote encolhe a cada
+    # tentativa, não refaz trabalho já bem-sucedido.
     MAX_TRANSLATE_ATTEMPTS = 3
 
     jobs = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    results = []
-    for job in jobs:
+
+    def build_prompt_text(job: dict) -> str:
         n_candidates = job.get("n_candidates", N_CANDIDATES)
         prompt = build_prompt(
             job["source_text"], job["target_syllables"], n_candidates=n_candidates
         )
         messages = [{"role": "user", "content": prompt}]
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = tokenizer([text], return_tensors="pt").to(device)
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-        candidates: list[str] = []
-        for attempt in range(1, MAX_TRANSLATE_ATTEMPTS + 1):
-            outputs = model.generate(
-                **inputs, max_new_tokens=1024, do_sample=True, temperature=0.7
-            )
-            response = tokenizer.decode(
-                outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
-            )
-            try:
-                candidates = parse_candidates(response)
-                break
-            except ValueError as exc:
-                print(
-                    f"[translate] job {job['id']}: tentativa {attempt}/"
-                    f"{MAX_TRANSLATE_ATTEMPTS} falhou ({exc})"
-                )
+    def generate_batch(batch_jobs: list[dict]) -> list[str]:
+        texts = [build_prompt_text(job) for job in batch_jobs]
+        inputs = tokenizer(texts, return_tensors="pt", padding=True).to(device)
+        outputs = model.generate(**inputs, max_new_tokens=1024, do_sample=True, temperature=0.7)
+        prompt_len = inputs["input_ids"].shape[1]
+        return [
+            tokenizer.decode(outputs[i][prompt_len:], skip_special_tokens=True)
+            for i in range(len(batch_jobs))
+        ]
 
+    candidates_by_id: dict[str, list[str]] = {job["id"]: [] for job in jobs}
+    pending = list(jobs)
+    for attempt in range(1, MAX_TRANSLATE_ATTEMPTS + 1):
+        if not pending:
+            break
+        still_pending = []
+        for chunk_start in range(0, len(pending), TRANSLATE_BATCH_SIZE):
+            chunk = pending[chunk_start : chunk_start + TRANSLATE_BATCH_SIZE]
+            responses = generate_batch(chunk)
+            for job, response in zip(chunk, responses):
+                try:
+                    candidates_by_id[job["id"]] = parse_candidates(response)
+                except ValueError as exc:
+                    print(
+                        f"[translate] job {job['id']}: tentativa {attempt}/"
+                        f"{MAX_TRANSLATE_ATTEMPTS} falhou ({exc})"
+                    )
+                    still_pending.append(job)
+        pending = still_pending
+
+    results = []
+    for job in jobs:
+        candidates = candidates_by_id[job["id"]]
         ranked = (
             rank_candidates(candidates, job["target_syllables"], job["source_text"])
             if candidates
@@ -178,7 +284,6 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
         adjust_tokens_for_retry,
         apply_ipa_overrides,
         duration_to_tokens,
-        infer_delivery_instruction,
         inject_pauses,
         is_within_tolerance,
         time_stretch_to_duration,
@@ -253,7 +358,34 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
     # do que retentando em rodadas seriais inteiras (processo novo no Pod +
     # round-trip de avaliação por rodada — isso sim é caro, era o gargalo
     # real, não a geração em si). Substitui o retry por rodada do T0.12.
+    #
+    # Testado 5 em 2026-09-18 (beast.mp4) e revertido pra 3 no mesmo dia:
+    # medido na prática que N=5 é mensuravelmente mais lento por chamada
+    # (lote maior, ~20-24it/s vs ~24-25it/s em N=3) e o problema que N=5
+    # tentava compensar (segmentos com duração completamente imprevisível)
+    # era na real um bug de parsing na tradução (`translation.py::
+    # parse_candidates`, corrigido no mesmo dia) mandando texto corrompido
+    # pro MOSS-TTS — não instabilidade do modelo que mais amostra resolvia.
+    # Com a causa raiz corrigida, N=3 já é suficiente; usuário pediu
+    # explicitamente pra priorizar velocidade de prototipagem.
     N_CANDIDATES = 3
+
+    # Achado real rodando beast.mp4 (2026-09-18): o bug de repetição do
+    # MOSS-TTS já documentado (SGLang: "a small fraction of utterances loop
+    # and generate up to max_new_tokens") apareceu ao vivo — 1 de 8 chamadas
+    # em lote não parou sozinha e consumiu os 4096 tokens inteiros (~5,5min
+    # só essa chamada, a ~12-13it/s), enquanto as outras 7 pararam sozinhas
+    # entre 106 e 446 passos. Como a geração em lote só retorna quando TODAS
+    # as sequências do batch terminam (ou batem o teto), 1 candidato solto em
+    # loop trava os outros 2 que já tinham terminado. Não faz sentido deixar
+    # um candidato sabidamente ruim (repetição/alucinação — nunca é o
+    # escolhido por `pick_best_synthesis`) correr até 4096: cortar mais cedo
+    # não piora a escolha final, só limita o desperdício. Teto escalado pelo
+    # orçamento real do job (6x tokens, piso 1024) em vez de um número fixo —
+    # cobre com folga o maior caso observado (446 passos pra ~150 tokens de
+    # orçamento) sem arriscar cortar um segmento longo legítimo.
+    MAX_NEW_TOKENS_MULTIPLIER = 6
+    MIN_MAX_NEW_TOKENS = 1024
 
     def synthesize_batch(
         text: str,
@@ -273,8 +405,9 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
         batch = processor([[message]] * N_CANDIDATES, mode="generation")
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
+        max_new_tokens = max(MIN_MAX_NEW_TOKENS, tokens * MAX_NEW_TOKENS_MULTIPLIER)
         outputs = model.generate(
-            input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=4096
+            input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=max_new_tokens
         )
 
         sr = processor.model_config.sampling_rate
@@ -306,9 +439,23 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
 
         reference = [job["reference_audio_path"]] if job.get("reference_audio_path") else None
         target_seconds = job["target_seconds"]
-        # T0.12c: só a pontuação do texto traduzido, sem processar o áudio
-        # original ainda — ver docstring de infer_delivery_instruction.
-        instruction = infer_delivery_instruction(text)
+        # DESLIGADO em 2026-09-19 — achado real, medido e reproduzido (não
+        # suposição): `infer_delivery_instruction` era a causa raiz dos
+        # piores casos de "MOSS-TTS instável" caçados a sessão inteira (ver
+        # docs/moss_tts_investigation.md). Experimento controlado no texto
+        # real de seg0011 (14 palavras + 1,8s de pausa em 3,2s de
+        # orçamento, tokens=40): COM a instrução de ênfase, 10/10 amostras
+        # entraram em loop (9-36s de áudio pra um alvo de 4,6s). SEM a
+        # instrução, MESMO texto/tokens: 0/10 loop, todas as 10 amostras em
+        # 2,88-3,44s — quase exatamente o orçamento pedido. O modelo
+        # interpreta "fale com ênfase e emoção genuína" como licença pra
+        # falar bem mais devagar/expansivo, e sob orçamento apertado isso
+        # vira um pedido estruturalmente impossível — a instabilidade era
+        # sintoma disso, não um bug aleatório do MOSS-TTS. Mantém a função
+        # (testada, lógica de detecção de pontuação continua válida) mas
+        # não chama mais aqui até haver uma versão redesenhada que não
+        # comprometa o orçamento de duração.
+        instruction = None
 
         tokens = duration_to_tokens(target_seconds)
         candidates = synthesize_batch(text, tokens, reference, out_dir, job["id"], instruction)
@@ -326,13 +473,17 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
         )
         stretched = False
 
-        # T0.15b: segmento abaixo do piso do delay pattern (MIN_SYNTHESIS_
-        # SECONDS) sai sistematicamente mais longo que o alvo real, porque
-        # duration_to_tokens/adjust_tokens_for_retry nunca pedem menos que
-        # o piso (ver docstring de synthesis.py). Comprime cada candidato de
-        # volta em vez de deixar sobrar pra assembly.py estourar a timeline
-        # (T0.16) ou tocar mais devagar que devia.
-        if not within_tolerance and target_seconds < MIN_SYNTHESIS_SECONDS:
+        # T0.15b, ampliado em 2026-09-18: achado real testando beast.mp4 —
+        # um segmento bem ACIMA do piso (target 5,38s) saiu com 8,0s depois
+        # do retry (49% acima do alvo, sem nenhuma correção), porque esta
+        # condição só cobria o caso abaixo de MIN_SYNTHESIS_SECONDS. Isso
+        # sobrou pra assembly.py, que estourou a timeline perto do fim do
+        # vídeo (`TimelineOverflowError`, 2 segmentos somando 1,8s
+        # descartado). O overshoot depois do retry não é exclusivo de
+        # segmento no piso — qualquer segmento pode sair fora da tolerância
+        # e precisar de compressão. Comprime sempre que sobrar fora da
+        # tolerância depois do retry, não só no caso do piso.
+        if not within_tolerance:
             stretched_candidates = []
             for cand_path, _secs in candidates:
                 audio, sample_rate = sf.read(str(cand_path), dtype="float32")
@@ -344,6 +495,44 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
                 median_seconds(candidates), target_seconds, tolerance
             )
             stretched = True
+
+        # Achado real 2026-09-18 (beast.mp4, N=3): pra segmentos JÁ acima do
+        # piso de síntese, um resultado ainda gritantemente fora mesmo
+        # depois do retry+stretch (visto: alvo 4,58s, os 3 candidatos
+        # saíram 11,5-52,9s — bug de repetição documentado do MOSS-TTS, não
+        # o piso estrutural) não tem conserto por compressão: o conteúdo em
+        # si está corrompido (loop), não só mais longo que devia. Gerar
+        # candidatos extras SÓ nesse caso raro (em vez de sempre pedir mais
+        # amostras por segurança, caro pra todo segmento) dá uma chance real
+        # de uma amostra nova escapar do loop, sem pagar esse custo nos
+        # ~90% dos segmentos que já funcionam de primeira. Não aplica pra
+        # segmento abaixo do piso (`target_seconds < MIN_SYNTHESIS_SECONDS`)
+        # — ali o "excesso" é estrutural e esperado (ver
+        # assembly.MAX_SINGLE_SEGMENT_DISCARD_SECONDS), mais amostra não
+        # muda o piso físico do modelo.
+        ESCALATION_RATIO_THRESHOLD = 1.5
+        escalated = False
+        if not within_tolerance and target_seconds >= MIN_SYNTHESIS_SECONDS:
+            best_ratio_error = min(
+                abs(secs / target_seconds - 1) for _, secs in candidates
+            )
+            if best_ratio_error > (ESCALATION_RATIO_THRESHOLD - 1):
+                # Mesmo N_CANDIDATES de sempre (lote extra, não é mais caro
+                # por amostra do que qualquer outra chamada) — só o GATILHO
+                # é raro, não o tamanho do lote extra.
+                extra_raw = synthesize_batch(
+                    text, tokens, reference, out_dir, f"{job['id']}_esc", instruction
+                )
+                extra: list[tuple[Path, float]] = []
+                for offset, (extra_path, secs) in enumerate(extra_raw):
+                    final_path = out_dir / f"{job['id']}_cand{len(candidates) + offset}.wav"
+                    extra_path.rename(final_path)
+                    extra.append((final_path, secs))
+                candidates = candidates + extra
+                within_tolerance = is_within_tolerance(
+                    median_seconds(candidates), target_seconds, tolerance
+                )
+                escalated = True
 
         meta.append(
             {
@@ -357,6 +546,7 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
                 "attempts": attempts,
                 "within_tolerance": within_tolerance,
                 "stretched": stretched,
+                "escalated": escalated,
             }
         )
 
@@ -399,6 +589,80 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     Path(args.output).write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
 
 
+def cmd_match_emotion(args: argparse.Namespace) -> None:
+    """Compara a emoção do áudio fonte com a do áudio dublado (item 4 do
+    plano de avaliação de qualidade, 2026-09-26 — usuário pediu detecção
+    automática de emoção, não só ouvido).
+
+    `emotion2vec_plus_large` (ACL 2024, via FunASR) classifica um trecho de
+    áudio num vetor de scores por classe (raiva, alegria, neutro etc.) —
+    roda uma vez por chamada de processo (mesmo padrão de `cmd_evaluate`),
+    carrega o modelo uma vez, processa o lote inteiro. A comparação em si
+    (similaridade de cosseno + limiar) é pura e mora em
+    `packages.pipeline.quality` — este comando só extrai o vetor do modelo
+    e delega o julgamento pra lá, mesma separação usada em `entonacao_desalinhada`.
+
+    Cada job: `id`, `dub_audio_path` (WAV do segmento já sintetizado, um
+    arquivo por segmento — mesmo layout de `cmd_evaluate`), `source_audio_path`
+    (o vocals.wav CHEIO do vídeo original — um só arquivo, compartilhado
+    entre todos os segmentos), `source_start`/`source_end` (segundos, pra
+    recortar o trecho correspondente do vocals.wav aqui dentro). Evita subir
+    um WAV por segmento da fonte só pra isso — o vocals.wav inteiro já
+    existe no Pod desde a separação de stems.
+    """
+    import numpy as np
+    import soundfile as sf
+    from funasr import AutoModel
+
+    from packages.pipeline.quality import emocao_incompativel, emotion_similarity
+
+    model = AutoModel(model="iic/emotion2vec_plus_large", disable_update=True)
+
+    def _classify(path: str) -> tuple[list[str], list[float]]:
+        res = model.generate(path, granularity="utterance", extract_embedding=False)
+        labels = [label.rsplit("/", 1)[-1] for label in res[0]["labels"]]
+        return labels, res[0]["scores"]
+
+    tmp_dir = Path("/tmp/novoaudio_emotion")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    source_cache: dict[str, tuple[np.ndarray, int]] = {}
+
+    jobs = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    results = []
+    for job in jobs:
+        source_path = job["source_audio_path"]
+        if source_path not in source_cache:
+            audio, sr = sf.read(source_path, dtype="float32")
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+            source_cache[source_path] = (audio, sr)
+        source_audio, source_sr = source_cache[source_path]
+
+        start_sample = int(round(job["source_start"] * source_sr))
+        end_sample = int(round(job["source_end"] * source_sr))
+        source_slice_path = tmp_dir / f"{job['id']}_source.wav"
+        sf.write(source_slice_path, source_audio[start_sample:end_sample], source_sr)
+
+        source_labels, source_scores = _classify(str(source_slice_path))
+        dub_labels, dub_scores = _classify(job["dub_audio_path"])
+        similarity = emotion_similarity(np.array(source_scores), np.array(dub_scores))
+        source_top = int(np.argmax(source_scores))
+        dub_top = int(np.argmax(dub_scores))
+        results.append(
+            {
+                "id": job["id"],
+                "similarity": similarity,
+                "emocao_incompativel": emocao_incompativel(similarity),
+                "source_emotion": source_labels[source_top],
+                "source_emotion_score": source_scores[source_top],
+                "dub_emotion": dub_labels[dub_top],
+                "dub_emotion_score": dub_scores[dub_top],
+            }
+        )
+
+    Path(args.output).write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -432,6 +696,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input", required=True)
     p.add_argument("--output", required=True)
     p.set_defaults(func=cmd_evaluate)
+
+    p = subparsers.add_parser("match_emotion")
+    p.add_argument("--input", required=True)
+    p.add_argument("--output", required=True)
+    p.set_defaults(func=cmd_match_emotion)
 
     return parser
 

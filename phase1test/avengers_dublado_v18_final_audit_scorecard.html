@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raio-X da Dublagem</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+
+  :root {
+    --bg: #f6f8f7; --surface: #ffffff; --surface-2: #eef2f0;
+    --ink: #12211d; --muted: #5b6c66; --border: #dde4e1;
+    --accent: #0f766e; --accent-soft: #d7ece9;
+    --good: #2f9e58; --good-soft: #e1f3e6;
+    --warning: #c97a1f; --warning-soft: #faecd8;
+    --critical: #c1432f; --critical-soft: #fbe4df;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1412; --surface: #101c19; --surface-2: #16221f;
+      --ink: #e7efec; --muted: #93a8a1; --border: #223330;
+      --accent: #2dd4bf; --accent-soft: #163330;
+      --good: #4ade80; --good-soft: #16301f;
+      --warning: #f2a94e; --warning-soft: #362510;
+      --critical: #f2705c; --critical-soft: #35180f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    padding-inline: 20px; padding-block: 32px 64px;
+    max-width: 980px; margin-inline: auto;
+  }
+  h1, h2, h3 { font-family: "IBM Plex Sans Condensed", ui-sans-serif, system-ui, sans-serif; margin: 0; }
+  .tabular { font-variant-numeric: tabular-nums; font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; padding-block-end: 20px; border-bottom: 1px solid var(--border); }
+  .eyebrow { font-size: 0.72rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin-block-end: 6px; }
+  h1 { font-size: 1.9rem; font-weight: 700; }
+  .video-name { color: var(--muted); font-size: 0.82rem; margin-block-start: 4px; max-width: 60ch; word-break: break-all; }
+  .verdict { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border-radius: 999px; font-family: "IBM Plex Sans Condensed", sans-serif; font-weight: 600; font-size: 0.98rem; white-space: nowrap; }
+  .verdict::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+  .verdict.aprovado { background: var(--good-soft); color: var(--good); }
+  .verdict.revisar { background: var(--warning-soft); color: var(--warning); }
+  .verdict.problematico { background: var(--critical-soft); color: var(--critical); }
+  section { margin-block-start: 34px; }
+  .section-title { font-size: 1.05rem; font-weight: 600; margin-block-end: 4px; }
+  .section-hint { color: var(--muted); font-size: 0.83rem; margin-block-end: 16px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .tile { background: var(--surface); padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; }
+  .tile-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+  .tile-value { font-size: 1.55rem; font-weight: 600; line-height: 1; }
+  .tile-caption { font-size: 0.76rem; color: var(--muted); }
+  .bars { display: flex; flex-direction: column; gap: 10px; }
+  .bar-row { display: grid; grid-template-columns: 168px 1fr 84px; align-items: center; gap: 12px; }
+  .bar-name { font-size: 0.85rem; }
+  .bar-track { position: relative; height: 20px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
+  .bar-fill { position: absolute; inset-block: 0; left: 0; border-radius: 5px; }
+  .bar-count { font-size: 0.8rem; color: var(--muted); text-align: right; }
+  .axis { display: grid; grid-template-columns: 168px 1fr 84px; gap: 12px; margin-block-start: 6px; }
+  .axis-ticks { display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 600; background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-2); }
+  .time-cell { white-space: nowrap; }
+  .cer-cell { font-weight: 600; }
+  .cer-cell.high { color: var(--critical); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip { font-size: 0.68rem; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 500; white-space: nowrap; }
+  .quote-original { color: var(--muted); font-style: italic; margin: 0 0 3px; }
+  .quote-dub { margin: 0 0 3px; }
+  .quote-heard { margin: 0; color: var(--accent); }
+  .diag-list { display: flex; flex-direction: column; gap: 14px; }
+  .diag-card { border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; background: var(--surface); }
+  .diag-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-block-end: 8px; flex-wrap: wrap; }
+  .diag-title { font-weight: 600; font-family: "IBM Plex Sans Condensed", sans-serif; font-size: 1.02rem; }
+  .diag-rate { font-size: 0.78rem; color: var(--critical); font-weight: 600; font-family: "IBM Plex Mono", monospace; }
+  .diag-cause { font-size: 0.87rem; margin: 0 0 8px; }
+  .diag-card ul { margin: 0 0 8px; padding-inline-start: 20px; font-size: 0.85rem; display: flex; flex-direction: column; gap: 6px; }
+  .diag-kpi { font-size: 0.8rem; color: var(--muted); margin: 0; }
+  .diag-empty { color: var(--muted); font-size: 0.88rem; }
+  footer { margin-block-start: 40px; padding-block-start: 16px; border-top: 1px solid var(--border); font-size: 0.78rem; color: var(--muted); }
+  @media (max-width: 560px) { .bar-row, .axis { grid-template-columns: 110px 1fr 60px; } .bar-name { font-size: 0.78rem; } }
+
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="eyebrow">novoaudio &middot; placar de qualidade</div>
+    <h1>Raio-X da Dublagem</h1>
+    <div class="video-name">.cache\dub\YTDown.com_YouTube_Avengers-Doomsday-Official-Trailer-In-Th_Media_irVNGjRFZGk_004_360p\source.mp4</div>
+    <div class="video-name">Etapas ligadas: embed_subtitles, emotion_match</div>
+  </div>
+  <div class="verdict problematico">Problemático</div>
+</header>
+
+<section>
+  <div class="tiles" id="tiles"></div>
+</section>
+
+<section>
+  <div class="section-title">Suspeitas por tipo</div>
+  <div class="section-hint">Fração dos segmentos sintetizados marcados com cada flag automática.</div>
+  <div class="bars" id="bars"></div>
+  <div class="axis"><div></div><div class="axis-ticks"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div><div></div></div>
+</section>
+
+<section>
+  <div class="section-title">Diagnóstico automático</div>
+  <div class="section-hint">Pra cada suspeita com taxa acima do limiar de revisão: causa raiz provável e como corrigir (packages/pipeline/diagnostics.py).</div>
+  <div class="diag-list"><div class="diag-card">
+  <div class="diag-head">
+    <span class="diag-title">Entonação/energia do dublado não acompanha o original</span>
+    <span class="diag-rate">50% dos segmentos</span>
+  </div>
+  <p class="diag-cause"><strong>Causa raiz:</strong> Causa raiz real, já documentada em `docs/moss_tts_investigation.md` (2026-09-19): `infer_delivery_instruction` (packages/pipeline/synthesis.py) detecta ênfase por pontuação ('!'/'?') e MANDA o MOSS-TTS falar com 'ênfase e emoção genuína' — mas está DESLIGADA (`instruction=None` sempre) desde essa data, porque aplicá-la incondicionalmente causou 2 casos reais de loop catastrófico: o modelo, sob instrução de ênfase, 'quer' uma duração natural de 7-10s pra um orçamento calibrado de ~4,6s, e trava tentando caber (10/10 amostras em loop com a instrução; 0/10 sem ela). A causa não é 'o modelo é instável' — é a instrução de emoção brigando com o orçamento de tokens, sem nenhum jeito de sinalizar emoção que não implique falar mais devagar.</p>
+  <ul><li>Re-habilitar `infer_delivery_instruction`, mas SÓ quando houver folga real de orçamento — ex.: pedir `tokens` com uma margem extra (ver `MIN_SYNTHESIS_SECONDS`/piso de tokens em `synthesis.py`) especificamente quando a instrução for aplicada, e comprimir o resultado de volta ao alvo com `time_stretch_to_duration` (já existe, já testado, já usado em produção pra outros casos de estouro — MAX_TIME_STRETCH_RATIO=1.5x preserva pitch via phase vocoder). Isso separa 'deixar o modelo falar expressivo' de 'caber no tempo', em vez de pedir os dois ao mesmo tempo pro mesmo mecanismo.</li><li>Validar ANTES de reativar em produção: rodar os mesmos 2 segmentos catastróficos do achado de 2026-09-19 (seg0006/seg0011 do vídeo beast.mp4, citados no doc) com instrução+tokens extra+time-stretch, medindo taxa de loop e CER — mesma disciplina de medição usada pra confirmar que o Layer 3 de pitch-transfer era prejudicial (não reativar por suposição).</li><li>Referência externa: IndexTTS2 (arXiv:2506.21619) resolve exatamente essa tensão desacoplando emoção de duração — dois modos de geração (contagem de tokens explícita vs. geração livre fiel à prosódia do prompt) em vez de um único mecanismo que tenta os dois ao mesmo tempo. TED-TTS (arXiv:2601.03170) propõe controle de emoção+duração 'training-free' sobre um TTS zero-shot já pronto — mesma categoria de modelo que o MOSS-TTS, sem precisar re-treinar.</li></ul>
+  <p class="diag-kpi"><strong>KPI afetado:</strong> flag_rates.entonacao_desalinhada e avg_prosody_correlation do placar — hoje entonacao_desalinhada em 50% no teste do Avengers.</p>
+</div><div class="diag-card">
+  <div class="diag-head">
+    <span class="diag-title">Emoção do dublado (emotion2vec) não bate com a do original</span>
+    <span class="diag-rate">50% dos segmentos</span>
+  </div>
+  <p class="diag-cause"><strong>Causa raiz:</strong> Mesma causa raiz de `entonacao_desalinhada`: sem `infer_delivery_instruction` ativa, todo segmento sai com a entrega neutra/default do MOSS-TTS, independente da emoção real da fala original (raiva, tristeza, etc.) — o pipeline não tem NENHUM sinal de emoção chegando na síntese hoje. A tentativa desta sessão de resolver via pós-processamento de áudio (Layer 3: extrair pitch/energia do original e impor no dublado, `packages/pipeline/prosody.py`) foi medida e É PREJUDICIAL — quase dobra o CER round-trip (0,082→0,149, até 5,5x pior num segmento) porque perturba o pitch de um áudio já sintetizado coerentemente, em vez de pedir a emoção certa NA síntese.</p>
+  <ul><li>Não insistir em pós-processamento de sinal (Layer 3 já provou ser o caminho errado, com número real). O caminho correto é o mesmo do item acima: a emoção precisa entrar como CONDICIONAMENTO da síntese (instruction do MOSS-TTS), não como filtro de áudio depois — resolver `entonacao_desalinhada` (acima) resolve a maior parte deste também, já que são a mesma causa raiz.</li><li>Fonte de sinal de emoção pra alimentar a instrução: hoje `infer_delivery_instruction` só olha pontuação ('!'/'?') do texto traduzido. Com `packages/pipeline/quality.py::emotion_similarity` e `scripts/pod_worker.py::cmd_match_emotion` já existindo (rodam `emotion2vec_plus_large` no áudio ORIGINAL), dá pra classificar a emoção do segmento fonte e mapear pra uma instrução mais específica que 'ênfase e emoção genuína' (ex.: instrução diferente pra 'sad' vs. 'angry' vs. 'neutral') — mais preciso que inferir só da pontuação.</li><li>Referência externa: IndexTTS2 usa um módulo Text-to-Emotion (T2E) que prediz a distribuição de emoção a partir do texto/contexto e combina com embeddings de emoção pré-computados — mesma ideia de usar um classificador de emoção pra CONDICIONAR a síntese, não pra corrigir o áudio depois de pronto.</li></ul>
+  <p class="diag-kpi"><strong>KPI afetado:</strong> flag_rates.emocao_incompativel e avg_emotion_similarity do placar — hoje emocao_incompativel em 50% no teste do Avengers.</p>
+</div></div>
+</section>
+
+<section>
+  <div class="section-title">Auditoria de transcrição final</div>
+  <div class="section-hint">Transcrição INDEPENDENTE do áudio realmente entregue (ASR round-trip pós-mixagem/transferência) comparada com o que era pra ser dito — pega divergência introduzida depois da síntese, não só na escolha do candidato.</div>
+  <div class="table-wrap" id="audit-table-wrap"></div>
+</section>
+
+<section>
+  <div class="section-title">Piores segmentos</div>
+  <div class="section-hint">Ordenados por número de flags simultâneas, depois por CER — primeiros candidatos a revisão manual no editor.</div>
+  <div class="table-wrap" id="worst-table-wrap"></div>
+</section>
+
+<footer>
+  Gerado por <code>packages/pipeline/report.py</code> a partir de
+  <span class="tabular" id="footer-count"></span> segmentos avaliados —
+  CER via ASR round-trip, prosódia via correlação de contorno de energia,
+  emoção via emotion2vec_plus_large.
+</footer>
+
+<script id="report-data" type="application/json">{"scorecard": {"total_segments": 8, "synthesized_segments": 8, "flag_counts": {"fora_duracao": 0, "cer_alto": 1, "truncado": 0, "traducao_infiel": 0, "clipping": 0, "silencio_anormal": 1, "locutor_suspeito": 0, "entonacao_desalinhada": 4, "emocao_incompativel": 4, "cer_final_alto": 1}, "flag_rates": {"fora_duracao": 0.0, "cer_alto": 0.125, "truncado": 0.0, "traducao_infiel": 0.0, "clipping": 0.0, "silencio_anormal": 0.125, "locutor_suspeito": 0.0, "entonacao_desalinhada": 0.5, "emocao_incompativel": 0.5, "cer_final_alto": 0.125}, "any_flag_rate": 0.75, "avg_cer": 0.08221801849765037, "avg_cer_final": 0.08221801849765037, "avg_prosody_correlation": 0.2346979116617814, "avg_emotion_similarity": 0.43800674744644585, "worst_segments": [{"id": "seg0005", "t_inicio": 70.469, "t_fim": 77.433, "flags": ["cer_alto", "entonacao_desalinhada", "cer_final_alto"], "cer": 0.352112676056338}, {"id": "seg0001", "t_inicio": 31.329, "t_fim": 40.171, "flags": ["silencio_anormal", "entonacao_desalinhada", "emocao_incompativel"], "cer": 0.0851063829787234}, {"id": "seg0002", "t_inicio": 40.872, "t_fim": 45.513, "flags": ["entonacao_desalinhada", "emocao_incompativel"], "cer": 0.038461538461538464}, {"id": "seg0003", "t_inicio": 47.374, "t_fim": 52.758, "flags": ["emocao_incompativel"], "cer": 0.05128205128205128}, {"id": "seg0000", "t_inicio": 20.265, "t_fim": 23.526, "flags": ["entonacao_desalinhada"], "cer": 0.0}], "verdict": "problematico"}, "segments": [{"id": "seg0000", "t_inicio": 20.265, "t_fim": 23.526, "texto_original": "We should be faced with an unthinkable decision.", "traducao": "Temos que tomar uma decisão inacreditável!", "translated_ok": true, "synthesized_ok": true, "synthesis_attempts": 1, "chosen_candidate_index": 1, "achieved_seconds": 3.36, "target_seconds": 3.2609999999999992, "within_duration_tolerance": true, "evaluated_ok": true, "cer": 0.0, "prosody_correlation": -0.25719826166113297, "flags": {"fora_duracao": false, "cer_alto": false, "truncado": false, "traducao_infiel": false, "clipping": false, "silencio_anormal": false, "locutor_suspeito": false, "entonacao_desalinhada": true, "emocao_incompativel": false, "cer_final_alto": false, "traducao_infiel_not_computed": true, "locutor_suspeito_not_computed": true}, "any_flag": true, "hipotese_final": "Temos que tomar uma decisão inacreditável.", "cer_final": 0.0, "emotion_match": {"id": "seg0000", "similarity": 0.8619175736530583, "emocao_incompativel": false, "source_emotion": "neutral", "source_emotion_score": 0.5984847545623779, "dub_emotion": "neutral", "dub_emotion_score": 0.9863271713256836}}, {"id": "seg0001", "t_inicio": 31.329, "t_fim": 40.171, "texto_original": "I've fought with many warriors in my time. They were far stronger than all of us put together.", "traducao": "Enfrentei muitos guerreiros na minha vida! Eles eram muito mais fortes do que somos todos junto.", "translated_ok": true, "synthesized_ok": true, "synthesis_attempts": 1, "chosen_candidate_index": 0, "achieved_seconds": 8.96, "target_seconds": 8.841999999999999, "within_duration_tolerance": true, "evaluated_ok": true, "cer": 0.0851063829787234, "prosody_correlation": 0.15195138076220152, "flags": {"fora_duracao": false, "cer_alto": false, "truncado": false, "traducao_infiel": false, "clipping": false, "silencio_anormal": true, "locutor_suspeito": false, "entonacao_desalinhada": true, "emocao_incompativel": true, "cer_final_alto": false, "traducao_infiel_not_computed": true, "locutor_suspeito_not_computed": true}, "any_flag": true, "hipotese_final": "E ficam-se muitos guerreiros na minha vida, eles eram muito mais fortes do que somos todos juntos.", "cer_final": 0.0851063829787234, "emotion_match": {"id": "seg0001", "similarity": 0.08557655107551496, "emocao_incompativel": true, "source_emotion": "sad", "source_emotion_score": 0.8467410206794739, "dub_emotion": "<unk>", "dub_emotion_score": 0.6872818470001221}}, {"id": "seg0002", "t_inicio": 40.872, "t_fim": 45.513, "texto_original": "And they died. They died facing enemies", "traducao": "Eles morreram! Ficaram diante dos inimigos e morreram!", "translated_ok": true, "synthesized_ok": true, "synthesis_attempts": 1, "chosen_candidate_index": 2, "achieved_seconds": 4.72, "target_seconds": 4.640999999999998, "within_duration_tolerance": true, "evaluated_ok": true, "cer": 0.038461538461538464, "prosody_correlation": -0.058052830303414994, "flags": {"fora_duracao": false, "cer_alto": false, "truncado": false, "traducao_infiel": false, "clipping": false, "silencio_anormal": false, "locutor_suspeito": false, "entonacao_desalinhada": true, "emocao_incompativel": true, "cer_final_alto": false, "traducao_infiel_not_computed": true, "locutor_suspeito_not_computed": true}, "any_flag": true, "hipotese_final": "Eles morreram, ficaram diante dos inimigos e morrerão.", "cer_final": 0.038461538461538464, "emotion_match": {"id": "seg0002", "similarity": 0.001339815524397556, "emocao_incompativel": true, "source_emotion": "sad", "source_emotion_score": 0.9999874830245972, "dub_emotion": "<unk>", "dub_emotion_score": 0.5890575647354126}}, {"id": "seg0003", "t_inicio": 47.374, "t_fim": 52.758, "texto_original": "and threats. It scared me far less than this one.", "traducao": "e ameaças. Assustou-me bem menos que isso.", "translated_ok": true, "synthesized_ok": true, "synthesis_attempts": 1, "chosen_candidate_index": 1, "achieved_seconds": 5.44, "target_seconds": 5.384, "within_duration_tolerance": true, "evaluated_ok": true, "cer": 0.05128205128205128, "prosody_correlation": 0.4407507692650707, "flags": {"fora_duracao": false, "cer_alto": false, "truncado": false, "traducao_infiel": false, "clipping": false, "silencio_anormal": false, "locutor_suspeito": false, "entonacao_desalinhada": false, "emocao_incompativel": true, "cer_final_alto": false, "traducao_infiel_not_computed": true, "locutor_suspeito_not_computed": true}, "any_flag": true, "hipotese_final": "E... e meaças. Assustou-me bem menos que isso.", "cer_final": 0.05128205128205128, "emotion_match": {"id": "seg0003", "similarity": 0.019084914664414518, "emocao_incompativel": true, "source_emotion": "<unk>", "source_emotion_score": 0.774384617805481, "dub_emotion": "neutral", "dub_emotion_score": 0.9983994364738464}}, {"id": "seg0004", "t_inicio": 62.204, "t_fim": 67.067, "texto_original": "Everything that they sacrifice will be for nothing if we do not stand together.", "traducao": "Se não nos unirmos, tudo que eles sacrifício será pra nada!", "translated_ok": true, "synthesized_ok": true, "synthesis_attempts": 1, "chosen_candidate_index": 1, "achieved_seconds": 4.96, "target_seconds": 4.862999999999992, "within_duration_tolerance": true, "evaluated_ok": true, "cer": 0.07017543859649122, "prosody_correlation": 0.35516791673793174, "flags": {"fora_duracao": false, "cer_alto": false, "truncado": false, "traducao_infiel": false, "clipping": false, "silencio_anormal": false, "locutor_suspeito": false, "entonacao_desalinhada": false, "emocao_incompativel": false, "cer_final_alto": false, "traducao_infiel_not_computed": true, "locutor_suspeito_not_computed": true}, "any_flag": false, "hipotese_final": "Se não nos unirmos, tudo que ser sacrifício será para nada.", "cer_final": 0.07017543859649122, "emotion_match": {"id": "seg0004", "similarity": 0.5971131497834063, "emocao_incompativel": false, "source_emotion": "<unk>", "source_emotion_score": 0.6445519924163818, "dub_emotion": "neutral", "dub_emotion_score": 0.4420930743217468}}, {"id": "seg0005", "t_inicio": 70.469, "t_fim": 77.433, "texto_original": "Put aside your petty squabbles. Presume nothing except this.", "traducao": "Deixa pra lá os seus bobos desentendimentos! Tá tudo baseado nisso mesmo!", "translated_ok": true, "synthesized_ok": true, "synthesis_attempts": 1, "chosen_candidate_index": 0, "achieved_seconds": 7.04, "target_seconds": 6.964000000000013, "within_duration_tolerance": true, "evaluated_ok": true, "cer": 0.352112676056338, "prosody_correlation": 0.27439543465340765, "flags": {"fora_duracao": false, "cer_alto": true, "truncado": false, "traducao_infiel": false, "clipping": false, "silencio_anormal": false, "locutor_suspeito": false, "entonacao_desalinhada": true, "emocao_incompativel": false, "cer_final_alto": true, "traducao_infiel_not_computed": true, "locutor_suspeito_not_computed": true}, "any_flag": true, "hipotese_final": "Deixa pra lá os seus bobos desentendimentos. Tá tudo baseado nisso, tá tudo baseando nisso nisso...", "cer_final": 0.352112676056338, "emotion_match": {"id": "seg0005", "similarity": 0.9370656510442553, "emocao_incompativel": false, "source_emotion": "<unk>", "source_emotion_score": 0.74810791015625, "dub_emotion": "<unk>", "dub_emotion_score": 0.7020006775856018}}, {"id": "seg0006", "t_inicio": 79.088, "t_fim": 84.392, "texto_original": "If you return, you will return as brothers and sisters.", "traducao": "Se você voltar, vai voltar como irmãos e irmãs...", "translated_ok": true, "synthesized_ok": true, "synthesis_attempts": 1, "chosen_candidate_index": 0, "achieved_seconds": 5.36, "target_seconds": 5.304000000000002, "within_duration_tolerance": true, "evaluated_ok": true, "cer": 0.0, "prosody_correlation": 0.5412639697184306, "flags": {"fora_duracao": false, "cer_alto": false, "truncado": false, "traducao_infiel": false, "clipping": false, "silencio_anormal": false, "locutor_suspeito": false, "entonacao_desalinhada": false, "emocao_incompativel": true, "cer_final_alto": false, "traducao_infiel_not_computed": true, "locutor_suspeito_not_computed": true}, "any_flag": true, "hipotese_final": "Se você voltar, vai voltar como irmãos e irmãs.", "cer_final": 0.0, "emotion_match": {"id": "seg0006", "similarity": 0.013117028145523926, "emocao_incompativel": true, "source_emotion": "neutral", "source_emotion_score": 0.9623457193374634, "dub_emotion": "disgusted", "dub_emotion_score": 0.937527596950531}}, {"id": "seg0007", "t_inicio": 91.958, "t_fim": 102.627, "texto_original": "But mark my words. We're going to need a miracle.", "traducao": "Mas jura? Precisamos de um milagre!", "translated_ok": true, "synthesized_ok": true, "synthesis_attempts": 1, "chosen_candidate_index": 0, "achieved_seconds": 10.72, "target_seconds": 10.668999999999997, "within_duration_tolerance": true, "evaluated_ok": true, "cer": 0.06060606060606061, "prosody_correlation": 0.4293049141217567, "flags": {"fora_duracao": false, "cer_alto": false, "truncado": false, "traducao_infiel": false, "clipping": false, "silencio_anormal": false, "locutor_suspeito": false, "entonacao_desalinhada": false, "emocao_incompativel": false, "cer_final_alto": false, "traducao_infiel_not_computed": true, "locutor_suspeito_not_computed": true}, "any_flag": false, "hipotese_final": "Mais dura. Precisamos de um milagre,", "cer_final": 0.06060606060606061, "emotion_match": {"id": "seg0007", "similarity": 0.9888392956809958, "emocao_incompativel": false, "source_emotion": "disgusted", "source_emotion_score": 0.7651496529579163, "dub_emotion": "disgusted", "dub_emotion_score": 0.9991992115974426}}], "video": ".cache\\dub\\YTDown.com_YouTube_Avengers-Doomsday-Official-Trailer-In-Th_Media_irVNGjRFZGk_004_360p\\source.mp4"}</script>
+<script>
+
+  const data = JSON.parse(document.getElementById('report-data').textContent);
+  const sc = data.scorecard;
+  const segments = data.segments;
+
+  const FLAG_LABELS = {"fora_duracao": "Fora da duração", "cer_alto": "CER alto (candidato)", "truncado": "Truncado", "traducao_infiel": "Tradução infiel", "clipping": "Clipping", "silencio_anormal": "Silêncio anormal", "locutor_suspeito": "Locutor suspeito", "entonacao_desalinhada": "Entonação desalinhada", "emocao_incompativel": "Emoção incompatível", "cer_final_alto": "CER alto (áudio final)"};
+  const NOT_COMPUTED = new Set(["locutor_suspeito", "traducao_infiel"]);
+
+  function esc(value) {
+    if (value == null) return "";
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+  function fmtPct(x) { return (x * 100).toFixed(0) + "%"; }
+  function fmtTime(s) {
+    if (s == null) return "-";
+    const m = Math.floor(s / 60);
+    const sec = (s % 60).toFixed(1).padStart(4, "0");
+    return m + ":" + sec;
+  }
+  function severityColor(rate) {
+    if (rate === 0) return "var(--muted)";
+    if (rate < 0.25) return "var(--good)";
+    if (rate < 0.5) return "var(--warning)";
+    return "var(--critical)";
+  }
+
+  const tiles = document.getElementById("tiles");
+  const tileDefs = [
+    { label: "Segmentos", value: sc.synthesized_segments + " / " + sc.total_segments, caption: fmtPct(sc.any_flag_rate) + " com alguma suspeita" },
+    { label: "CER candidato", value: sc.avg_cer == null ? "—" : sc.avg_cer.toFixed(3), caption: "ASR round-trip, pré-mixagem" },
+    { label: "CER final", value: sc.avg_cer_final == null ? "—" : sc.avg_cer_final.toFixed(3), caption: "ASR round-trip, áudio entregue" },
+    { label: "Correlação de prosódia", value: sc.avg_prosody_correlation == null ? "—" : sc.avg_prosody_correlation.toFixed(2), caption: "energia: original × dublado" },
+    { label: "Similaridade emocional", value: sc.avg_emotion_similarity == null ? "—" : sc.avg_emotion_similarity.toFixed(2), caption: "emotion2vec: original × dublado" },
+  ];
+  for (const t of tileDefs) {
+    const el = document.createElement("div");
+    el.className = "tile";
+    el.innerHTML = '<div class="tile-label">' + t.label + '</div><div class="tile-value tabular">' + t.value + '</div><div class="tile-caption">' + t.caption + '</div>';
+    tiles.appendChild(el);
+  }
+
+  const bars = document.getElementById("bars");
+  const flagEntries = Object.entries(sc.flag_rates).sort((a, b) => b[1] - a[1]);
+  for (const [name, rate] of flagEntries) {
+    const count = sc.flag_counts[name];
+    const color = severityColor(rate);
+    const row = document.createElement("div");
+    row.className = "bar-row";
+    const notComputed = NOT_COMPUTED.has(name);
+    row.innerHTML = '<div class="bar-name">' + (FLAG_LABELS[name] || name) + (notComputed ? ' <span style="color:var(--muted)">(n/d)</span>' : '') + '</div><div class="bar-track"><div class="bar-fill" style="width:' + (rate * 100) + '%; background:' + color + '"></div></div><div class="bar-count tabular">' + count + ' · ' + fmtPct(rate) + '</div>';
+    bars.appendChild(row);
+  }
+
+  const segmentsById = Object.fromEntries(segments.map((s) => [s.id, s]));
+
+  const worstWrap = document.getElementById("worst-table-wrap");
+  let worstRows = "";
+  for (const w of (sc.worst_segments || [])) {
+    const seg = segmentsById[w.id];
+    const cerHigh = (w.cer || 0) > 0.15;
+    const chips = w.flags.map((f) => '<span class="chip">' + (FLAG_LABELS[f] || f) + '</span>').join("");
+    worstRows += '<tr><td class="time-cell tabular">' + fmtTime(w.t_inicio) + '–' + fmtTime(w.t_fim) + '</td><td class="cer-cell tabular' + (cerHigh ? ' high' : '') + '">' + (w.cer ?? 0).toFixed(3) + '</td><td><div class="chips">' + chips + '</div></td><td>' + (seg ? '<p class="quote-original">' + esc(seg.texto_original) + '</p><p class="quote-dub">' + esc(seg.traducao) + '</p>' : '') + '</td></tr>';
+  }
+  worstWrap.innerHTML = '<table><thead><tr><th>Tempo</th><th>CER</th><th>Flags</th><th>Fala</th></tr></thead><tbody>' + worstRows + '</tbody></table>';
+
+  const auditWrap = document.getElementById("audit-table-wrap");
+  let auditRows = "";
+  const auditable = segments.filter((s) => s.cer_final != null).sort((a, b) => (b.cer_final || 0) - (a.cer_final || 0));
+  for (const s of auditable) {
+    const cerHigh = (s.cer_final || 0) > 0.15;
+    auditRows += '<tr><td class="time-cell tabular">' + fmtTime(s.t_inicio) + '–' + fmtTime(s.t_fim) + '</td><td class="cer-cell tabular' + (cerHigh ? ' high' : '') + '">' + (s.cer_final).toFixed(3) + '</td><td><p class="quote-original">esperado: ' + esc(s.traducao) + '</p><p class="quote-heard">ouvido: ' + esc(s.hipotese_final) + '</p></td></tr>';
+  }
+  auditWrap.innerHTML = auditable.length ? ('<table><thead><tr><th>Tempo</th><th>CER final</th><th>Esperado × ouvido (ASR)</th></tr></thead><tbody>' + auditRows + '</tbody></table>') : '<div class="diag-empty" style="padding:14px 16px">Auditoria final não rodou neste relatório (relatório antigo, gerado antes desse check existir).</div>';
+
+  document.getElementById("footer-count").textContent = sc.total_segments;
+
+</script>
+</body>
+</html>

@@ -31,7 +31,6 @@ feita — pendente.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 
 from packages.ptbr.syllables import count_syllables
@@ -67,16 +66,71 @@ def build_prompt(
     )
 
 
-def parse_candidates(llm_response: str) -> list[str]:
-    """Extrai a lista de candidatos do JSON devolvido pelo LLM (tolera markdown ao redor)."""
-    match = re.search(r"\{.*\}", llm_response, re.DOTALL)
-    if not match:
+def _extract_json_object(text: str) -> str:
+    """Acha o primeiro objeto JSON bem-formado em `text` (tolera markdown/
+    texto ao redor), contando chaves em vez de regex guloso.
+
+    Achado real 2026-09-18 (beast.mp4, segmentos maiores após o merge do
+    piso de duração): o regex antigo (`\\{.*\\}` guloso com DOTALL) pega do
+    PRIMEIRO `{` até o ÚLTIMO `}` da resposta inteira — se o LLM escrever
+    qualquer coisa extra com chaves (rascunho, correção, exemplo) depois do
+    JSON de verdade, o match engole tudo isso junto e `json.loads` tanto
+    pode falhar quanto (pior) "conseguir" parsear uma estrutura garantida
+    errada. Contar profundidade de chaves acha o par certo do primeiro `{`,
+    não importa o que vier depois na resposta.
+    """
+    start = text.find("{")
+    if start == -1:
         raise ValueError("resposta do LLM não contém um objeto JSON")
-    data = json.loads(match.group(0))
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise ValueError("resposta do LLM tem um objeto JSON incompleto (chave não fechada)")
+
+
+def parse_candidates(llm_response: str) -> list[str]:
+    """Extrai a lista de candidatos do JSON devolvido pelo LLM (tolera markdown ao redor).
+
+    Achado real 2026-09-18 (beast.mp4): pra segmentos maiores (depois do
+    merge pelo piso de duração de síntese), o Qwen às vezes aninhou cada
+    candidato numa lista de 1 elemento (`[["texto"]]` em vez de
+    `["texto"]`) — a versão antiga fazia `str(c)` cegamente, e isso virava
+    o texto literal `"['texto']"` sendo mandado pro MOSS-TTS sintetizar
+    (com colchetes/aspas falados e sem qualquer validação). O sintoma era
+    duração de síntese completamente imprevisível (até 2,3x o alvo, em
+    TODOS os candidatos) — parecia instabilidade do MOSS-TTS, mas a raiz
+    era texto de entrada corrompido, não o modelo de voz.
+
+    Achado seguinte, mesmo dia: pra pelo menos 1 segmento em 13, o Qwen
+    repetiu o MESMO aninhamento nas 3 tentativas de retry seguidas — não é
+    sorte de amostragem, é um hábito de formatação dele pra esse tipo de
+    conteúdo. Rejeitar e torcer pro retry sortear diferente desperdiça
+    tentativas à toa quando o formato do erro é conhecido e recuperável:
+    lista de 1 elemento string vira o próprio elemento, sem gastar retry.
+    Qualquer outro formato (lista com mais de 1 item, não-string dentro)
+    continua sendo rejeitado — só o padrão exato e conhecido é recuperado.
+    """
+    json_text = _extract_json_object(llm_response)
+    data = json.loads(json_text)
     candidates = data.get("candidates") or data.get("candidatos")
     if not candidates:
         raise ValueError("JSON não tem a chave 'candidates'")
-    return [str(c) for c in candidates]
+    result: list[str] = []
+    for c in candidates:
+        if isinstance(c, list) and len(c) == 1 and isinstance(c[0], str):
+            c = c[0]
+        if not isinstance(c, str):
+            raise ValueError(
+                f"candidato não é uma string (veio {type(c).__name__}: {c!r:.80}) — "
+                "resposta do LLM provavelmente aninhou uma lista a mais"
+            )
+        result.append(c)
+    return result
 
 
 @dataclass

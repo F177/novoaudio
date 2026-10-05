@@ -177,3 +177,61 @@ def test_build_scorecard_averages_final_cer_independently_from_candidate_cer() -
     assert scorecard["avg_cer"] == pytest.approx(0.05)
     assert scorecard["avg_cer_final"] == pytest.approx(0.45)
     assert scorecard["flag_rates"]["cer_final_alto"] == 1.0
+
+
+def test_build_scorecard_flag_overlap_diagonal_matches_flag_counts() -> None:
+    segments = [_clean_segment(f"seg{i:04d}") for i in range(3)]
+    segments[0]["flags"] = _flags(cer_alto=True)
+    segments[0]["any_flag"] = True
+    scorecard = build_scorecard(segments)
+    assert scorecard["flag_overlap"]["cer_alto"]["cer_alto"] == scorecard["flag_counts"]["cer_alto"]
+
+
+def test_build_scorecard_flag_overlap_counts_segments_with_both_flags() -> None:
+    segments = [_clean_segment(f"seg{i:04d}") for i in range(3)]
+    # seg0000: só cer_alto. seg0001: cer_alto E clipping juntos. seg0002: limpo.
+    segments[0]["flags"] = _flags(cer_alto=True)
+    segments[0]["any_flag"] = True
+    segments[1]["flags"] = _flags(cer_alto=True, clipping=True)
+    segments[1]["any_flag"] = True
+
+    scorecard = build_scorecard(segments)
+    overlap = scorecard["flag_overlap"]
+    assert overlap["cer_alto"]["cer_alto"] == 2  # seg0000 + seg0001
+    assert overlap["clipping"]["clipping"] == 1  # só seg0001
+    assert overlap["cer_alto"]["clipping"] == 1  # só seg0001 tem as duas
+    assert overlap["clipping"]["cer_alto"] == 1  # simétrico
+
+
+def test_build_scorecard_flag_overlap_is_zero_when_no_segment_has_both() -> None:
+    segments = [_clean_segment(f"seg{i:04d}") for i in range(2)]
+    segments[0]["flags"] = _flags(cer_alto=True)
+    segments[0]["any_flag"] = True
+    segments[1]["flags"] = _flags(clipping=True)
+    segments[1]["any_flag"] = True
+
+    scorecard = build_scorecard(segments)
+    overlap = scorecard["flag_overlap"]
+    assert overlap["cer_alto"]["clipping"] == 0
+    assert overlap["clipping"]["cer_alto"] == 0
+
+
+def test_build_scorecard_segments_with_multiple_flags_counts_two_or_more() -> None:
+    segments = [_clean_segment(f"seg{i:04d}") for i in range(3)]
+    segments[0]["flags"] = _flags(cer_alto=True)  # só 1 flag
+    segments[0]["any_flag"] = True
+    segments[1]["flags"] = _flags(cer_alto=True, clipping=True)  # 2 flags
+    segments[1]["any_flag"] = True
+    segments[2]["flags"] = _flags(cer_alto=True, clipping=True, truncado=True)  # 3 flags
+    segments[2]["any_flag"] = True
+
+    scorecard = build_scorecard(segments)
+    assert scorecard["segments_with_multiple_flags"] == 2  # seg0001 e seg0002
+
+
+def test_build_scorecard_segments_with_multiple_flags_zero_when_none_overlap() -> None:
+    segments = [_clean_segment(f"seg{i:04d}") for i in range(2)]
+    segments[0]["flags"] = _flags(cer_alto=True)
+    segments[0]["any_flag"] = True
+    scorecard = build_scorecard(segments)
+    assert scorecard["segments_with_multiple_flags"] == 0

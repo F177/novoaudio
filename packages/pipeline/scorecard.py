@@ -54,6 +54,8 @@ class Scorecard:
     synthesized_segments: int
     flag_counts: dict[str, int]
     flag_rates: dict[str, float]
+    flag_overlap: dict[str, dict[str, int]]
+    segments_with_multiple_flags: int
     any_flag_rate: float
     avg_cer: float | None
     avg_cer_final: float | None
@@ -68,6 +70,8 @@ class Scorecard:
             "synthesized_segments": self.synthesized_segments,
             "flag_counts": self.flag_counts,
             "flag_rates": self.flag_rates,
+            "flag_overlap": self.flag_overlap,
+            "segments_with_multiple_flags": self.segments_with_multiple_flags,
             "any_flag_rate": self.any_flag_rate,
             "avg_cer": self.avg_cer,
             "avg_cer_final": self.avg_cer_final,
@@ -76,6 +80,23 @@ class Scorecard:
             "worst_segments": self.worst_segments,
             "verdict": self.verdict,
         }
+
+
+def _build_flag_overlap(segments: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Matriz de sobreposição entre flags (T0.20): `overlap[a][b]` conta
+    quantos segmentos têm as flags `a` E `b` simultaneamente — a diagonal
+    `overlap[a][a]` é igual a `flag_counts[a]`. Ajuda a distinguir flags
+    que marcam o MESMO problema disfarçado de vários (sempre aparecem
+    juntas) de problemas de verdade independentes.
+    """
+    overlap: dict[str, dict[str, int]] = {a: dict.fromkeys(FLAG_NAMES, 0) for a in FLAG_NAMES}
+    for s in segments:
+        flags = s.get("flags", {})
+        active = [name for name in FLAG_NAMES if flags.get(name)]
+        for a in active:
+            for b in active:
+                overlap[a][b] += 1
+    return overlap
 
 
 def _verdict(any_flag_rate: float) -> str:
@@ -109,6 +130,13 @@ def build_scorecard(segments: list[dict[str, Any]], *, worst_n: int = 5) -> dict
     flag_rates = {
         name: (count / n_synth if n_synth else 0.0) for name, count in flag_counts.items()
     }
+
+    flag_overlap = _build_flag_overlap(synthesized)
+    segments_with_multiple_flags = sum(
+        1
+        for s in synthesized
+        if len([name for name in FLAG_NAMES if s.get("flags", {}).get(name)]) >= 2
+    )
 
     any_flag_rate = (sum(1 for s in segments if s.get("any_flag")) / total) if total else 0.0
 
@@ -153,6 +181,8 @@ def build_scorecard(segments: list[dict[str, Any]], *, worst_n: int = 5) -> dict
         synthesized_segments=n_synth,
         flag_counts=flag_counts,
         flag_rates=flag_rates,
+        flag_overlap=flag_overlap,
+        segments_with_multiple_flags=segments_with_multiple_flags,
         any_flag_rate=any_flag_rate,
         avg_cer=avg_cer,
         avg_cer_final=avg_cer_final,

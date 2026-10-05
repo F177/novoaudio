@@ -110,7 +110,7 @@ Três problemas no instrumento que mede todo o resto:
 
 **Aceite:** `cer_final` medido sobre o áudio mixado. Os três tipos de corrupção disparam `cer_final_alto` ou `has_repetition`. Piso de CER da T0.13 remedido com o decoder novo, n ≥ 20.
 
-### T0.20 — Métricas de expressividade confiáveis 🤝
+### T0.20 — Métricas de expressividade confiáveis 🤝 (feito, 2026-10-05)
 1. `entonacao_desalinhada` mede a correlação de contorno de energia entre fonte e dublagem, e é calculada depois de `apply_energy_envelope` ter imposto esse contorno (com `strength=0.5`). A melhora de 0,235 para 0,353 é em boa parte tautológica. Além disso, correlação quadro a quadro entre inglês e português significa pouco, porque sílabas e ordem de palavras não se alinham. Troque por estatísticas de F0 agregadas por segmento (faixa, desvio, inclinação), que a transferência de energia não toca. A energia sai da flag e fica só como diagnóstico. Se a transferência de envelope vale a pena — inclusive se desloca ênfase para a sílaba errada — passa a ser decidido pelos rótulos da T0.28.
 2. `emocao_incompativel`: a fonte já usa o stem de voz (conferido em `cmd_match_emotion`). Falta verificar se o cosseno é dominado pela classe neutra e, se o piso de 3,2 s cair na T0.26, definir uma duração mínima abaixo da qual a flag não é emitida.
 3. O scorecard passa a reportar a sobreposição entre flags (quantos segmentos têm duas ou mais).

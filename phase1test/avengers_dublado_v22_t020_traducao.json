@@ -1,0 +1,58 @@
+[
+  {
+    "id": "seg0000",
+    "t_inicio": 20.265,
+    "t_fim": 23.526,
+    "texto_original": "We should be faced with an unthinkable decision.",
+    "traducao_usada": "Temos que tomar uma decisão inacreditável!"
+  },
+  {
+    "id": "seg0001",
+    "t_inicio": 31.329,
+    "t_fim": 40.171,
+    "texto_original": "I've fought with many warriors in my time. They were far stronger than all of us put together.",
+    "traducao_usada": "Enfrentei muitos guerreiros na minha vida! Eles eram muito mais fortes do que somos todos junto."
+  },
+  {
+    "id": "seg0002",
+    "t_inicio": 40.872,
+    "t_fim": 45.513,
+    "texto_original": "And they died. They died facing enemies",
+    "traducao_usada": "Eles morreram! Ficaram diante dos inimigos e morreram!"
+  },
+  {
+    "id": "seg0003",
+    "t_inicio": 47.374,
+    "t_fim": 52.758,
+    "texto_original": "and threats. It scared me far less than this one.",
+    "traducao_usada": "e ameaças. Assustou-me bem menos que isso."
+  },
+  {
+    "id": "seg0004",
+    "t_inicio": 62.204,
+    "t_fim": 67.067,
+    "texto_original": "Everything that they sacrifice will be for nothing if we do not stand together.",
+    "traducao_usada": "Se não nos unirmos, tudo que eles sacrifício será pra nada!"
+  },
+  {
+    "id": "seg0005",
+    "t_inicio": 70.469,
+    "t_fim": 77.433,
+    "texto_original": "Put aside your petty squabbles. Presume nothing except this.",
+    "traducao_usada": "Deixa pra lá os seus bobos desentendimentos! Tá tudo baseado nisso mesmo!"
+  },
+  {
+    "id": "seg0006",
+    "t_inicio": 79.088,
+    "t_fim": 84.392,
+    "texto_original": "If you return, you will return as brothers and sisters.",
+    "traducao_usada": "Se você voltar, vai voltar como irmãos e irmãs..."
+  },
+  {
+    "id": "seg0007",
+    "t_inicio": 91.958,
+    "t_fim": 102.627,
+    "texto_original": "But mark my words. We're going to need a miracle.",
+    "traducao_usada": "Mas jura? Precisamos de um milagre!"
+  }
+]

@@ -140,6 +140,42 @@ def test_render_dashboard_html_never_inlines_segment_text_as_raw_html() -> None:
     assert payload[0]["segments"][0]["texto_original"] == dangerous
 
 
+def test_render_dashboard_html_includes_flag_overlap_payload_and_wiring() -> None:
+    # T0.20: scorecard reporta a matriz de sobreposição entre flags — o
+    # dashboard precisa levar o dado e ter a lógica client-side que lê
+    # `flag_overlap`/`segments_with_multiple_flags` (não dá pra executar
+    # JS aqui, então confirma que o dado chega e que o código que lê
+    # esses campos está presente no HTML servido).
+    history = [
+        _entry(
+            scorecard={
+                "total_segments": 2,
+                "synthesized_segments": 2,
+                "any_flag_rate": 0.5,
+                "flag_counts": {"cer_alto": 1, "clipping": 1},
+                "flag_rates": {"cer_alto": 0.5, "clipping": 0.5},
+                "flag_overlap": {
+                    "cer_alto": {"cer_alto": 1, "clipping": 1},
+                    "clipping": {"cer_alto": 1, "clipping": 1},
+                },
+                "segments_with_multiple_flags": 1,
+                "avg_cer": 0.1,
+                "avg_cer_final": 0.1,
+                "avg_prosody_correlation": None,
+                "avg_emotion_similarity": None,
+                "worst_segments": [],
+                "verdict": "revisar",
+            }
+        )
+    ]
+    html = render_dashboard_html(history)
+    payload = _extract_payload(html)
+    assert payload[0]["scorecard"]["flag_overlap"]["cer_alto"]["clipping"] == 1
+    assert payload[0]["scorecard"]["segments_with_multiple_flags"] == 1
+    assert "sc.flag_overlap" in html
+    assert "sc.segments_with_multiple_flags" in html
+
+
 def _extract_payload(html: str) -> list[dict]:
     match = re.search(
         r'<script id="report-data" type="application/json">(.*?)</script>', html, re.DOTALL

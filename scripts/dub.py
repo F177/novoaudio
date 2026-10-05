@@ -80,6 +80,7 @@ from packages.pipeline.quality import (
     clipping,
     count_energy_bursts,
     entonacao_desalinhada,
+    extract_pitch_stats,
     fora_duracao,
     has_repetition,
     loop_confirmed_by_bursts,
@@ -725,6 +726,7 @@ def run_pipeline(
                 audio = audio.mean(axis=1)
 
             source_envelope: np.ndarray | None = None
+            source_segment_audio: np.ndarray | None = None
             if source_vocals_audio is not None:
                 start_sample = int(round(s.t_inicio * source_vocals_sr))
                 end_sample = int(round(s.t_fim * source_vocals_sr))
@@ -757,17 +759,31 @@ def run_pipeline(
             evaluated_ok = seg_id in eval_texts
             cer = character_error_rate(translated_text, hypothesis) if evaluated_ok else 1.0
 
-            # Métrica de avaliação pura (não controla nada, só mede): compara
-            # a forma do contorno de energia do áudio ORIGINAL com a do áudio
-            # dublado FINAL (já com qualquer transferência de prosódia
-            # aplicada, se houver) — sinaliza quando a entonação do dublado
-            # não acompanha nem de longe a entrega emocional original, mesmo
-            # sem `--prosody-transfer` ligado.
+            # Diagnóstico puro (não entra mais na flag, T0.20 — ver achado
+            # real no docstring de `quality.PROSODY_CORRELATION_THRESHOLD`:
+            # era calculada DEPOIS de `apply_energy_envelope` já ter imposto
+            # esse contorno, tautológico com a própria transferência).
             prosody_corr: float | None = None
             if source_envelope is not None and len(audio) > 0:
                 dub_envelope = extract_energy_envelope(audio, sr)
                 aligned_source_envelope = resample_envelope(source_envelope, len(dub_envelope))
                 prosody_corr = prosody_correlation(aligned_source_envelope, dub_envelope)
+
+            # T0.20: `entonacao_desalinhada` agora compara estatísticas
+            # agregadas de F0 (desvio em semitons) fonte vs. dublado — não a
+            # correlação de energia acima, que `apply_energy_envelope` (só
+            # ganho) nunca mexe mas que SIM é tautológica quando comparada
+            # contra si mesma. Extraído sempre (não só com --pitch-transfer
+            # ligado): é medição pura, não controla o áudio.
+            source_pitch_std: float | None = None
+            dub_pitch_std: float | None = None
+            if source_segment_audio is not None and len(audio) > 0:
+                source_pitch_stats = extract_pitch_stats(
+                    extract_pitch_contour(source_segment_audio, source_vocals_sr)
+                )
+                dub_pitch_stats = extract_pitch_stats(extract_pitch_contour(audio, sr))
+                source_pitch_std = source_pitch_stats["std"]
+                dub_pitch_std = dub_pitch_stats["std"]
 
             flags = QualityFlags(
                 fora_duracao=fora_duracao(achieved_seconds, target_seconds, on_screen=False),
@@ -778,7 +794,9 @@ def run_pipeline(
                 silencio_anormal=silencio_anormal(audio, sr, expected_pause_seconds),
                 locutor_suspeito=False,
                 entonacao_desalinhada=(
-                    entonacao_desalinhada(prosody_corr) if prosody_corr is not None else False
+                    entonacao_desalinhada(source_pitch_std, dub_pitch_std)
+                    if source_pitch_std is not None and dub_pitch_std is not None
+                    else False
                 ),
                 # `emocao_incompativel` fica False aqui e é corrigido depois do
                 # loop (ver bloco "avaliação de emoção" abaixo) — precisa do
@@ -792,6 +810,8 @@ def run_pipeline(
                     "evaluated_ok": evaluated_ok,
                     "cer": cer,
                     "prosody_correlation": prosody_corr,
+                    "pitch_std_source": source_pitch_std,
+                    "pitch_std_dub": dub_pitch_std,
                     "flags": {
                         **{k: v for k, v in vars(flags).items()},
                         "traducao_infiel_not_computed": True,

@@ -322,9 +322,17 @@ def locutor_suspeito(
 # diretamente os contornos de energia/pitch que `prosody.py` já extrai
 # (mesmo dado usado pra TRANSFERIR prosódia agora vira métrica de
 # avaliação também) — correlação de Pearson entre o contorno do original e
-# o do dublado. Limiar ainda não medido em produção (não temos volume de
-# dado real anotado por humano pra calibrar) — ponto de partida como os
-# outros limiares deste módulo.
+# o do dublado.
+#
+# T0.20, achado real: essa correlação deixou de alimentar a flag
+# `entonacao_desalinhada` (ver abaixo) por dois problemas medidos — (1)
+# era calculada DEPOIS de `apply_energy_envelope` já ter imposto esse
+# mesmo contorno no dublado (quando `--prosody-transfer` está ligado), e
+# a melhora registrada (0,235→0,353) era em boa parte a correção sendo
+# medida contra si mesma; (2) correlação quadro a quadro entre inglês e
+# português tem pouco significado — sílabas e ordem de palavras não se
+# alinham no tempo entre os dois idiomas. A função continua aqui como
+# diagnóstico puro (relatório, não gate).
 PROSODY_CORRELATION_THRESHOLD = 0.3
 
 
@@ -353,11 +361,56 @@ def prosody_correlation(source_contour: np.ndarray, dub_contour: np.ndarray) -> 
     return float(np.corrcoef(source_contour, dub_contour)[0, 1])
 
 
+# T0.20: ponto de partida, não calibrado (mesmo aviso dos outros limiares
+# deste módulo) — dublado com desvio de F0 abaixo dessa fração do desvio
+# da fonte conta como entrega achatada/monótona.
+PITCH_FLATNESS_RATIO = 0.5
+
+
+def extract_pitch_stats(pitch_contour: np.ndarray) -> dict[str, float]:
+    """Estatísticas agregadas de um contorno de pitch relativo (mesmo
+    formato de `prosody.extract_pitch_contour`: semitons relativos à
+    mediana vozeada do segmento, 0.0 em frame não-vozado) — faixa, desvio
+    padrão e inclinação ao longo do tempo.
+
+    T0.20: substitui correlação quadro a quadro como base da flag
+    `entonacao_desalinhada` — correlação entre EN/PT quadro a quadro não
+    significa muito (sílabas e ordem de palavras não se alinham no
+    tempo), e essas estatísticas resumem a VARIAÇÃO real de entonação por
+    segmento, que `apply_energy_envelope` (só muda ganho) nunca toca —
+    diferente da correlação de energia antiga, não é mais tautológico com
+    a transferência de prosódia.
+
+    Frames não-vozados (0.0) são excluídos do cálculo — não contam como
+    "pitch plano de verdade", só ausência de sinal. Menos de 2 frames
+    vozados não tem desvio/inclinação definidos — devolve tudo 0.0.
+    """
+    voiced_idx = np.flatnonzero(pitch_contour != 0.0)
+    if len(voiced_idx) < 2:
+        return {"range": 0.0, "std": 0.0, "slope": 0.0}
+    voiced = pitch_contour[voiced_idx]
+    return {
+        "range": float(np.max(voiced) - np.min(voiced)),
+        "std": float(np.std(voiced)),
+        "slope": float(np.polyfit(voiced_idx, voiced, 1)[0]),
+    }
+
+
 def entonacao_desalinhada(
-    correlation: float, threshold: float = PROSODY_CORRELATION_THRESHOLD
+    source_pitch_std: float, dub_pitch_std: float, *, min_ratio: float = PITCH_FLATNESS_RATIO
 ) -> bool:
-    """Correlação de prosódia (energia ou pitch) abaixo do limiar."""
-    return correlation < threshold
+    """Dublado com desvio de F0 (`extract_pitch_stats`) muito menor que a
+    fonte sinaliza entrega achatada/monótona (T0.20) — mede variação real
+    de entonação por segmento, não correlação quadro a quadro entre
+    idiomas diferentes.
+
+    Fonte sem variação de pitch detectável (`source_pitch_std<=0`, ex.:
+    segmento todo não-vozado) não tem base de comparação — não sinaliza;
+    ausência de sinal na própria fonte não é evidência de desalinhamento.
+    """
+    if source_pitch_std <= 0:
+        return False
+    return dub_pitch_std < source_pitch_std * min_ratio
 
 
 # Achado real 2026-09-26, item 4 do plano de avaliação de qualidade pedido

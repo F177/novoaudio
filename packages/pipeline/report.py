@@ -303,6 +303,9 @@ _SCRIPT = """
       '<div class="section-hint">Fração dos segmentos sintetizados marcados com cada flag automática.</div>' +
       '<div class="bars" id="bars"></div>' +
       '<div class="axis"><div></div><div class="axis-ticks"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div><div></div></div></section>' +
+      '<section><div class="section-title">Sobreposição entre flags</div>' +
+      '<div class="section-hint" id="overlap-hint"></div>' +
+      '<div id="overlap-list"></div></section>' +
       '<section><div class="section-title">Diagnóstico automático</div>' +
       '<div class="section-hint">Pra cada suspeita com taxa acima do limiar de revisão: causa raiz provável e como corrigir (packages/pipeline/diagnostics.py).</div>' +
       renderDiagnostics(entry.diagnostics) + '</section>' +
@@ -340,6 +343,30 @@ _SCRIPT = """
       row.innerHTML = '<div class="bar-name">' + (FLAG_LABELS[name] || name) + (notComputed ? ' <span style="color:var(--muted)">(n/d)</span>' : '') + '</div><div class="bar-track"><div class="bar-fill" style="width:' + (rate * 100) + '%; background:' + color + '"></div></div><div class="bar-count tabular">' + count + ' · ' + fmtPct(rate) + '</div>';
       bars.appendChild(row);
     }
+
+    const overlapHint = document.getElementById("overlap-hint");
+    const overlapList = document.getElementById("overlap-list");
+    const multi = sc.segments_with_multiple_flags || 0;
+    overlapHint.textContent = multi + " de " + (sc.synthesized_segments ?? 0) + " segmentos têm duas ou mais flags ao mesmo tempo — pares abaixo, do mais comum ao mais raro.";
+    const overlap = sc.flag_overlap || {};
+    const pairs = [];
+    const seenPairs = new Set();
+    for (const a of Object.keys(overlap)) {
+      for (const b of Object.keys(overlap[a] || {})) {
+        if (a === b) continue;
+        const pairKey = [a, b].sort().join("|");
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+        const count = overlap[a][b] || 0;
+        if (count > 0) pairs.push({ a, b, count });
+      }
+    }
+    pairs.sort((x, y) => y.count - x.count);
+    overlapList.innerHTML = pairs.length
+      ? '<div class="bars">' + pairs.map((p) =>
+          '<div class="bar-row"><div class="bar-name">' + (FLAG_LABELS[p.a] || p.a) + ' + ' + (FLAG_LABELS[p.b] || p.b) + '</div><div class="bar-track"><div class="bar-fill" style="width:' + Math.min(100, (p.count / (sc.synthesized_segments || 1)) * 100) + '%; background:var(--accent)"></div></div><div class="bar-count tabular">' + p.count + '</div></div>'
+        ).join("") + '</div>'
+      : '<div class="diag-empty">Nenhum par de flags apareceu junto nesta execução.</div>';
 
     const segments = entry.segments || [];
     const segmentsById = Object.fromEntries(segments.map((s) => [s.id, s]));

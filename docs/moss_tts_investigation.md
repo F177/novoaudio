@@ -628,6 +628,53 @@ como risco conhecido: referências muito curtas (poucas palavras) ficam
 mais sensíveis a essa classe de falso positivo depois da remoção do
 anti-loop do decoder.
 
+### 2026-10-05 — T0.20: métricas de expressividade confiáveis
+
+**1. `entonacao_desalinhada` trocada de correlação de energia pra
+estatísticas de F0.** A versão antiga comparava o contorno de energia
+fonte×dublado por correlação de Pearson — mas essa correlação era
+calculada DEPOIS de `apply_energy_envelope` já ter imposto esse mesmo
+contorno no dublado (quando `--prosody-transfer` está ligado), então a
+melhora registrada antes (0,235→0,353) era em boa parte a correção sendo
+medida contra si mesma. Também: correlação quadro a quadro entre inglês e
+português tem pouco significado (sílabas e ordem de palavras não se
+alinham no tempo).
+
+Trocada por `quality.extract_pitch_stats` (faixa, desvio, inclinação de
+F0 relativo, reaproveitando `prosody.extract_pitch_contour` já existente)
++ `entonacao_desalinhada(source_pitch_std, dub_pitch_std)` — compara
+desvio de F0 fonte vs. dublado; dublado muito mais monótono que a fonte
+sinaliza entrega achatada. Validado com teste sintético (critério de
+aceite): `apply_energy_envelope` com `strength=1.0` (máximo) não altera a
+estatística em mais de 0,1 semitom — não é mais tautológico.
+
+Validado em dado real (Avengers, 8 segmentos): a nova métrica identifica
+exatamente os casos de entrega mais plana — `seg0001` (desvio fonte
+17,53 semitons → dublado 2,39, ~7x mais monótono), `seg0002` (19,26→6,46,
+~3x) e `seg0007` (12,77→1,84, ~7x) — e corretamente NÃO sinaliza
+`seg0000`, onde a própria FONTE já é quase plana (desvio 0,51) e o
+dublado tem mais variação, não menos.
+
+**2. `emocao_incompativel`: checagem de dominância da classe neutra, com
+números reais.** Rodado `--emotion-match` de novo no Avengers (8
+segmentos): dos 4 segmentos incompatíveis, NENHUM é neutro×neutro — são
+divergências de verdade (`sad`→`<unk>` 2x, `<unk>`→`neutral` 1x,
+`neutral`→`disgusted` 1x). Dos 4 compatíveis, só 1 é neutro×neutro mútuo
+(`seg0000`); os outros 3 incluem um match forte de verdade
+(`disgusted`→`disgusted`, confiança >0,76 dos dois lados, `seg0007`).
+Conclusão: a baixa similaridade não é artefato de "o dublado sempre sai
+neutro" — é sinal real na maioria dos casos. Nenhuma mudança de código
+necessária. Piso de duração mínima pra suprimir a flag (condicional à
+T0.26) não se aplica ainda — T0.26 não foi feita.
+
+**3. Scorecard reporta sobreposição entre flags.** `scorecard.py` agora
+devolve `flag_overlap` (matriz simétrica: quantos segmentos têm cada PAR
+de flags simultaneamente) e `segments_with_multiple_flags`. No mesmo
+vídeo: 3 de 8 segmentos têm 2+ flags; o par mais comum é
+`emocao_incompativel` + `entonacao_desalinhada` (2 segmentos) — esperado,
+já que as duas vêm da mesma causa raiz (entrega sem condicionamento de
+estilo, T0.29). Renderizado no dashboard local.
+
 ## Decisão (2026-09-14, confirmada explicitamente com o usuário)
 
 - Mexer no código de geração do MOSS-TTS em si é uma escolha consciente,

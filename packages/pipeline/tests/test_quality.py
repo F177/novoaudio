@@ -1,17 +1,21 @@
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
+import soundfile as sf
 
 from packages.pipeline.quality import (
     QualityFlags,
     cer_alto,
     character_error_rate,
     clipping,
+    count_energy_bursts,
     evaluate_segment,
     fora_duracao,
     has_repetition,
     locutor_suspeito,
+    loop_confirmed_by_bursts,
     silencio_anormal,
     traducao_infiel,
     truncado,
@@ -84,6 +88,62 @@ def test_has_repetition_false_for_normal_sentence() -> None:
 
 def test_has_repetition_false_for_short_text() -> None:
     assert has_repetition("Mas toma nota.") is False
+
+
+def _silence(seconds: float) -> np.ndarray:
+    return np.zeros(int(seconds * SAMPLE_RATE), dtype=np.float32)
+
+
+def test_count_energy_bursts_counts_separate_voiced_regions() -> None:
+    audio = np.concatenate(
+        [_silence(0.2), _tone(0.3), _silence(0.2), _tone(0.3), _silence(0.2), _tone(0.3)]
+    )
+    assert count_energy_bursts(audio, SAMPLE_RATE) == 3
+
+
+def test_count_energy_bursts_single_continuous_voiced_region_is_one() -> None:
+    audio = np.concatenate([_silence(0.1), _tone(1.0), _silence(0.1)])
+    assert count_energy_bursts(audio, SAMPLE_RATE) == 1
+
+
+def test_count_energy_bursts_all_silence_is_zero() -> None:
+    assert count_energy_bursts(_silence(1.0), SAMPLE_RATE) == 0
+
+
+def test_count_energy_bursts_matches_documented_seg0009_ground_truth() -> None:
+    # Regressão real (T0.19): docs/moss_tts_investigation.md registra 5-6
+    # rajadas contadas à mão nesse áudio exato (1,84s, referência "Deixa as
+    # bobagens pra lá.", 5 palavras) — o caso que expôs a alucinação de
+    # repetição do Whisper (transcreveu a frase 28x num áudio sem loop
+    # real nenhum). Fixture committada de propósito (ver .gitignore) pra
+    # amarrar a função ao achado documentado, não a dado sintético.
+    fixture_path = Path(__file__).parent / "fixtures" / "seg0009_base.wav"
+    audio, sr = sf.read(fixture_path, dtype="float32")
+    bursts = count_energy_bursts(audio, sr)
+    assert 5 <= bursts <= 6
+
+
+def test_loop_confirmed_by_bursts_true_when_far_above_expected() -> None:
+    # dado real do teste de mutação da T0.19 (frase de 10 palavras colada
+    # 2x): ~12 rajadas numa cópia, ~24 em duas — 24 > 10×1,5 confirma loop
+    assert loop_confirmed_by_bursts(burst_count=24, expected_words=10) is True
+
+
+def test_loop_confirmed_by_bursts_false_when_matching_expected() -> None:
+    # mesmo caso do seg0009: 5 rajadas reais, 5 palavras esperadas — não é
+    # loop, mesmo que o Whisper tenha alucinado repetição na transcrição
+    assert loop_confirmed_by_bursts(burst_count=5, expected_words=5) is False
+
+
+def test_loop_confirmed_by_bursts_single_copy_does_not_false_positive() -> None:
+    # dado real: 10 palavras, ~12 rajadas numa cópia só (sem duplicar) —
+    # não pode disparar, ou toda frase normal seria flagrada como loop
+    assert loop_confirmed_by_bursts(burst_count=12, expected_words=10) is False
+
+
+def test_loop_confirmed_by_bursts_zero_expected_words_any_burst_is_suspect() -> None:
+    assert loop_confirmed_by_bursts(burst_count=1, expected_words=0) is True
+    assert loop_confirmed_by_bursts(burst_count=0, expected_words=0) is False
 
 
 def test_truncado_true_when_tail_of_reference_is_missing() -> None:
@@ -213,4 +273,5 @@ def test_quality_flags_serializes_to_json() -> None:
         "entonacao_desalinhada": False,
         "emocao_incompativel": False,
         "cer_final_alto": False,
+        "loop_confirmado": False,
     }

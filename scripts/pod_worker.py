@@ -568,24 +568,32 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         # condition_on_previous_text=True (o default) alucina texto repetido
         # em loop em áudio curto — confirmado direto num áudio real de 4,2s,
         # uma frase só, que sem esse ajuste virava a mesma frase 16x seguidas.
-        # Bug conhecido do faster-whisper, não do áudio sendo avaliado.
+        # Bug conhecido do faster-whisper, não do áudio sendo avaliado. Esse
+        # ajuste continua.
         #
         # T0.17 achado real: mesmo com o ajuste acima, o Whisper AINDA
-        # alucina frase repetida em alguns clipes curtos — confirmado
-        # contando rajadas de energia no áudio (5-6 rajadas reais, texto
-        # dizendo a mesma frase de 5-6 palavras 28x). Isso inflava muito a
-        # taxa de "síntese ruim"/retry sem o MOSS-TTS ter feito nada de
-        # errado. `repetition_penalty`/`no_repeat_ngram_size` (mesma técnica
-        # de anti-loop de LLM de texto, aplicada aqui no decoder do Whisper)
-        # resolveu 2 de 3 casos reais testados por completo; o 3º melhorou
-        # bastante mas não 100% — ver docs/known_issues se persistir.
+        # alucina frase repetida em alguns clipes curtos (seg0009: 5-6
+        # rajadas reais de energia no áudio, texto dizendo a mesma frase de
+        # 5 palavras 28x na transcrição). `repetition_penalty`/
+        # `no_repeat_ngram_size` (técnica de anti-loop de LLM de texto,
+        # aplicada aqui no decoder do Whisper) conteve isso.
+        #
+        # T0.19, REVERTIDO: esses dois parâmetros proíbem o decoder de
+        # transcrever QUALQUER repetição de 3+ tokens — inclusive repetição
+        # REAL de loop do MOSS-TTS, deixando `has_repetition` praticamente
+        # cego pro problema que ele existe pra pegar, e penalizando palavras
+        # que legitimamente se repetem (artigos, preposições). Removidos.
+        # A disambiguação entre "loop real do TTS" e "alucinação do Whisper"
+        # agora é feita depois, com um sinal independente do ASR —
+        # `quality.count_energy_bursts`/`loop_confirmed_by_bursts`, mesmo
+        # método usado à mão no seg0009: loop real tem muito mais rajadas de
+        # energia que as sílabas esperadas do texto; alucinação do Whisper
+        # não, porque o áudio continua intacto.
         segments, _info = model.transcribe(
             job["audio_path"],
             language="pt",
             beam_size=5,
             condition_on_previous_text=False,
-            repetition_penalty=1.3,
-            no_repeat_ngram_size=3,
         )
         text = " ".join(segment.text.strip() for segment in segments)
         results.append({"id": job["id"], "text": text})

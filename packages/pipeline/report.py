@@ -35,6 +35,7 @@ FLAG_LABELS = {
     "entonacao_desalinhada": "Entonação desalinhada",
     "emocao_incompativel": "Emoção incompatível",
     "cer_final_alto": "CER alto (áudio final)",
+    "loop_confirmado": "Loop confirmado (repetição real)",
 }
 NOT_COMPUTED_FLAGS = {"traducao_infiel", "locutor_suspeito"}
 VERDICT_LABELS = {"aprovado": "Aprovado", "revisar": "Revisar", "problematico": "Problemático"}

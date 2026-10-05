@@ -33,6 +33,7 @@ FLAG_NAMES = (
     "entonacao_desalinhada",
     "emocao_incompativel",
     "cer_final_alto",
+    "loop_confirmado",
 )
 
 VERDICT_APROVADO = "aprovado"

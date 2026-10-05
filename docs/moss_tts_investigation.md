@@ -553,6 +553,81 @@ que agora sabemos que a MAIORIA dos casos catastróficos observados nesta
 sessão tinha uma causa raiz identificável e corrigível, não eram só "sorte
 ruim" do modelo.
 
+### 2026-10-05 — T0.19: instrumento de avaliação confiável
+
+Três problemas corrigidos no próprio instrumento que mede o resto do
+pipeline (não no MOSS-TTS):
+
+**1. "CER final" media o segmento errado.** Transcrevia
+`final_segments/<seg>.wav` — o segmento seco, só pós-transferência de
+prosódia, ainda fora da timeline. Como a transferência de energia só
+muda ganho (decoder determinístico), saía idêntico ao CER do candidato
+sempre que `--prosody-transfer` estava desligado. Corrigido: `cer_final`
+agora recorta cada segmento do `final_audio.wav` MIXADO (depois de
+`place_segments_on_timeline` + `mix_with_background` + normalização), na
+janela em que foi posicionado — ali é onde fundo alto, sobreposição com
+vizinho e corte no fim da timeline aparecem de verdade.
+
+**2. O decoder do `evaluate` não enxergava loop.**
+`repetition_penalty=1.3`/`no_repeat_ngram_size=3` (adicionados no T0.17
+pro achado do `seg0009`) proibiam o Whisper de transcrever QUALQUER
+repetição de 3+ tokens — inclusive repetição REAL de loop do MOSS-TTS.
+Removidos. A disambiguação entre "loop real" e "alucinação do Whisper"
+agora usa um sinal independente do ASR: `count_energy_bursts` conta
+rajadas de energia no áudio seco; `loop_confirmed_by_bursts` compara
+contra a contagem de PALAVRAS da referência (não sílabas — achado real
+abaixo).
+
+**Achado real durante a implementação:** a primeira versão comparava
+rajadas contra SÍLABAS esperadas, não palavras. Validado contra o
+`seg0009` documentado (5 palavras, 5-6 rajadas — bate). Mas o teste de
+mutação (item 3 abaixo), com uma frase de 10 palavras/23 sílabas colada
+2x, deu 24 rajadas — MENOS que 23×1,5=34,5, deixando a duplicação
+INVISÍVEL ao limiar por sílaba. Rajada correlaciona com palavra/frase
+curta, não núcleo fonético por sílaba (confirmado nos dois pontos de
+dado real: seg0009 e o teste de mutação). Corrigido pra comparar contra
+palavras antes de qualquer uso em produção — pego pelo próprio teste de
+mutação que a tarefa pedia, não por revisão de código.
+
+**3. Teste de mutação, real, no Pod** — base: `dub_clairo/seg0026`
+(4,88s, "temos que colocar uma guitarra com mais potência e
+personalidade", 10 palavras, CER original 0,0):
+
+| mutação | hipótese (ASR real) | CER | `has_repetition` | rajadas | `loop_confirmado` |
+|---|---|---|---|---|---|
+| corte no meio (silêncio no 2º terço) | "Temos que colocar com mais potência e personalidade." | 0,2031 | False | 9 | — |
+| ruído forte (gaussiano, σ=0,3) | "É isso que eu não faço. Eu não digo nada. Eu não faço nada." | 0,7344 | False | 1 | — |
+| frase colada 2x | (frase repetida 2x, idêntica) | 1,0156 | **True** | 24 | **True** |
+
+Todas as três disparam `cer_alto` (CER_THRESHOLD=0,15); a duplicação
+também dispara `loop_confirmado`, com os dois sinais (lexical + energia)
+de acordo. Critério de aceite da T0.19 cumprido com dado real, não
+sintético.
+
+**4. Piso de CER (T0.13) remedido com o decoder novo, n=24** (≥20 pedido
+pelo aceite) — segmentos já avaliados como bons em `.cache/dub_*`
+(clairo, lego), retranscritos com o decoder sem
+`repetition_penalty`/`no_repeat_ngram_size`:
+
+| | piso antigo (n=24, mesmos segmentos) | piso novo |
+|---|---|---|
+| média | 0,0127 | 0,0417 (0,0168 excluindo 1 outlier) |
+| máximo | 0,0422 | 0,6154 (1 segmento) / 0,0923 sem ele |
+
+**Achado real, custo mensurável:** removendo `repetition_penalty`, o
+Whisper ocasionalmente insere uma abertura alucinada curta em referência
+MUITO curta (`dub_lego/seg0001`, "Tá ouvindo eu?", 3 palavras) — "Não,
+não. Tá ouvindo eu?" — sem repetição real (`has_repetition=False`,
+correto), só uma inserção que infla CER desproporcionalmente num texto
+curto. Esse ÚNICO segmento, de 24, passa de CER_THRESHOLD=0,15 e
+dispararia `cer_final_alto` num dub que na prática está bom. Sem esse
+outlier, os outros 23/24 ficam com média 0,0168 e máximo 0,0923 — ainda
+bem abaixo do limiar. Não corrigido nesta tarefa (fora do escopo da
+T0.19, que pediu medir o piso, não eliminar esse efeito) — registrado
+como risco conhecido: referências muito curtas (poucas palavras) ficam
+mais sensíveis a essa classe de falso positivo depois da remoção do
+anti-loop do decoder.
+
 ## Decisão (2026-09-14, confirmada explicitamente com o usuário)
 
 - Mexer no código de geração do MOSS-TTS em si é uma escolha consciente,

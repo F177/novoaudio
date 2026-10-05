@@ -78,9 +78,11 @@ from packages.pipeline.quality import (
     cer_alto,
     character_error_rate,
     clipping,
+    count_energy_bursts,
     entonacao_desalinhada,
     fora_duracao,
     has_repetition,
+    loop_confirmed_by_bursts,
     prosody_correlation,
     silencio_anormal,
     truncado,
@@ -809,10 +811,38 @@ def run_pipeline(
 
         segment_results.append(result)
 
-    # --- upload único do áudio FINAL por segmento (já com energia/pitch
-    # transferidos, se ligados) — usado pelos dois checks abaixo. Não dá
-    # pra reaproveitar o candidato bruto no Pod: o diretório remoto de
-    # síntese não é persistente entre sessões/Pods.
+    # --- 8b. montagem final (timeline + mix com o fundo + normalização de
+    # loudness) — precisa acontecer ANTES da auditoria final de CER (T0.19):
+    # é o áudio REALMENTE entregue, não o segmento seco isolado. Antes da
+    # T0.19, "CER final" transcrevia `final_segments/<seg>.wav` (segmento
+    # seco, só pós-transferência de prosódia, ainda fora da timeline) — por
+    # isso saía idêntico ao CER do candidato sempre que `--prosody-transfer`
+    # não estava ligado (a transferência de energia só muda ganho, decoder
+    # determinístico). Fundo alto, sobreposição com vizinho e corte no fim
+    # da timeline só aparecem depois da mixagem, que é onde recortamos agora.
+    total_duration = _probe_duration_seconds(video_path)
+    placement = place_segments_on_timeline(timed_segments, total_duration, SYNTH_SAMPLE_RATE)
+    if vocals_only:
+        # --vocals-only (T0.12, pedido pontual pra avaliar a voz sem o fundo
+        # original atrapalhando) — comportamento padrão do produto continua
+        # remixando com o fundo (ver mix_with_background abaixo).
+        mixed_audio = placement.timeline
+        mix_discarded_samples = 0
+    else:
+        mix = mix_with_background(placement.timeline, background_audio, SYNTH_SAMPLE_RATE)
+        mixed_audio = mix.audio
+        mix_discarded_samples = mix.discarded_samples
+    normalized = normalize_loudness(mixed_audio, SYNTH_SAMPLE_RATE)
+
+    final_audio_path = cached("final_audio.wav")
+    sf.write(final_audio_path, normalized, SYNTH_SAMPLE_RATE)
+
+    # --- upload único do áudio FINAL por segmento, SECO (já com energia/
+    # pitch transferidos, se ligados, mas ainda fora da timeline/mix) —
+    # usado por match_emotion (T0.20 decide se isso muda; fora de escopo da
+    # T0.19, que é só sobre `cer_final`). Não dá pra reaproveitar o
+    # candidato bruto no Pod: o diretório remoto de síntese não é
+    # persistente entre sessões/Pods.
     if final_audio_by_seg:
         final_segments_dir = cache_dir / "final_segments"
         final_segments_dir.mkdir(parents=True, exist_ok=True)
@@ -826,14 +856,31 @@ def run_pipeline(
         # falado no áudio em português independentemente pra ver se dá
         # match com o que era pra ser falado, pra ver se tá compreensível
         # e saindo tudo". `cer` (calculado antes, na escolha do candidato)
-        # mede o áudio SECO pré-transferência de prosódia; `cer_final` mede
-        # o áudio REALMENTE entregue — pode divergir se a transferência de
-        # prosódia (ou qualquer outro pós-processamento futuro) corromper
-        # o conteúdo sem que o CER do candidato tivesse como flagrar.
-        # Default-on (não opt-in como emoção): é uma leitura, não muda o
-        # áudio, e reaproveita um comando que já roda mesmo assim.
+        # mede o áudio seco; `cer_final` mede o áudio MIXADO de verdade —
+        # recorta cada segmento de `normalized` na janela em que foi
+        # posicionado na timeline (T0.19). Default-on (não opt-in como
+        # emoção): é uma leitura, não muda o áudio.
+        results_by_id = {r["id"]: r for r in segment_results}
+        final_mixed_segments_dir = cache_dir / "final_mixed_segments"
+        final_mixed_segments_dir.mkdir(parents=True, exist_ok=True)
+        for seg_id, _, _ in final_audio_by_seg:
+            s = segments_by_id[seg_id]
+            achieved = results_by_id[seg_id]["achieved_seconds"]
+            start_sample = int(round(s.t_inicio * SYNTH_SAMPLE_RATE))
+            end_sample = min(
+                start_sample + int(round(achieved * SYNTH_SAMPLE_RATE)), len(normalized)
+            )
+            mixed_segment_audio = normalized[start_sample:end_sample]
+            sf.write(
+                final_mixed_segments_dir / f"{seg_id}.wav", mixed_segment_audio, SYNTH_SAMPLE_RATE
+            )
+        with _timed_stage("upload_final_mixed_segments"):
+            upload_to_pod(
+                pod, str(final_mixed_segments_dir), f"{remote_job_dir}/final_mixed_segments"
+            )
+
         final_cer_jobs = [
-            {"id": seg_id, "audio_path": f"{remote_job_dir}/final_segments/{seg_id}.wav"}
+            {"id": seg_id, "audio_path": f"{remote_job_dir}/final_mixed_segments/{seg_id}.wav"}
             for seg_id, _, _ in final_audio_by_seg
         ]
         (cache_dir / "final_cer_jobs.json").write_text(
@@ -858,6 +905,7 @@ def run_pipeline(
         final_hypotheses = {
             e["id"]: e["text"] for e in json.loads(final_cer_path.read_text(encoding="utf-8"))
         }
+        dry_audio_by_id = {seg_id: (audio, sr) for seg_id, audio, sr in final_audio_by_seg}
         for result in segment_results:
             hypothesis_final = final_hypotheses.get(result["id"])
             if hypothesis_final is None:
@@ -867,6 +915,26 @@ def run_pipeline(
             result["cer_final"] = cer_final
             result["flags"]["cer_final_alto"] = cer_alto(cer_final)
             result["any_flag"] = result["any_flag"] or cer_alto(cer_final)
+
+            # T0.19: `evaluate` não suprime mais repetição real (removido
+            # `repetition_penalty`/`no_repeat_ngram_size`), então também
+            # reabriu a porta pra alucinação de repetição do próprio
+            # Whisper (achado do seg0009). Desempata com um sinal
+            # independente do ASR: rajadas de energia reais no áudio SECO
+            # (sem fundo, que poderia mascarar/inflar rajadas) contra as
+            # PALAVRAS esperadas da tradução — não sílabas, achado real do
+            # teste de mutação desta tarefa (ver
+            # `quality.loop_confirmed_by_bursts`): rajada correlaciona com
+            # palavra/frase curta, não núcleo fonético.
+            if has_repetition(hypothesis_final):
+                dry_audio, dry_sr = dry_audio_by_id[result["id"]]
+                bursts = count_energy_bursts(dry_audio, dry_sr)
+                expected_words = len(result.get("traducao", "").split())
+                result["energy_bursts"] = bursts
+                result["expected_words"] = expected_words
+                loop_confirmado = loop_confirmed_by_bursts(bursts, expected_words)
+                result["flags"]["loop_confirmado"] = loop_confirmado
+                result["any_flag"] = result["any_flag"] or loop_confirmado
 
         # --- avaliação de emoção (remoto, emotion2vec_plus_large via
         # FunASR) — item 4 do plano de avaliação de qualidade pedido pelo
@@ -914,23 +982,6 @@ def run_pipeline(
                 result["emotion_match"] = emotion_result
                 result["flags"]["emocao_incompativel"] = emotion_result["emocao_incompativel"]
                 result["any_flag"] = result["any_flag"] or emotion_result["emocao_incompativel"]
-
-    total_duration = _probe_duration_seconds(video_path)
-    placement = place_segments_on_timeline(timed_segments, total_duration, SYNTH_SAMPLE_RATE)
-    if vocals_only:
-        # --vocals-only (T0.12, pedido pontual pra avaliar a voz sem o fundo
-        # original atrapalhando) — comportamento padrão do produto continua
-        # remixando com o fundo (ver mix_with_background abaixo).
-        mixed_audio = placement.timeline
-        mix_discarded_samples = 0
-    else:
-        mix = mix_with_background(placement.timeline, background_audio, SYNTH_SAMPLE_RATE)
-        mixed_audio = mix.audio
-        mix_discarded_samples = mix.discarded_samples
-    normalized = normalize_loudness(mixed_audio, SYNTH_SAMPLE_RATE)
-
-    final_audio_path = cached("final_audio.wav")
-    sf.write(final_audio_path, normalized, SYNTH_SAMPLE_RATE)
 
     subtitle_path: Path | None = None
     if embed_subtitles:

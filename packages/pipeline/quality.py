@@ -60,6 +60,21 @@ SILENCE_RMS_THRESHOLD = 0.01
 SILENCE_WINDOW_SECONDS = 0.05
 SILENCE_MARGIN_SECONDS = 0.5
 
+# T0.19: limiar de RMS pra separar "rajada de fala" de silêncio entre
+# rajadas — diferente de SILENCE_RMS_THRESHOLD (esse é "silêncio total",
+# mais baixo). Validado contra o único dado real que temos: o áudio de
+# `seg0009` citado em docs/moss_tts_investigation.md (1,84s, referência
+# "Deixa as bobagens pra lá.", 5 palavras) tem, à mão, 5-6 rajadas reais.
+# Com esse limiar e SILENCE_WINDOW_SECONDS, a contagem automática bate em
+# 5 nesse áudio exato (testado em `.cache/moss_tts_src/
+# rep_test_seg0009_base.wav`) — é o único ponto de calibração que existe,
+# não uma média sobre volume.
+BURST_RMS_THRESHOLD = 0.03
+# Ponto de partida, não calibrado (mesmo aviso dos outros limiares deste
+# módulo): quantas vezes mais rajadas do que PALAVRAS esperadas conta
+# como loop de verdade, em vez de variação normal de ritmo de fala.
+LOOP_BURST_MARGIN = 1.5
+
 
 def fora_duracao(achieved_seconds: float, target_seconds: float, *, on_screen: bool) -> bool:
     """Duração real fora da tolerância de isocronia (±8% on-screen, ±20% off-screen)."""
@@ -190,6 +205,58 @@ def has_repetition(text: str, min_window: int = 2, max_window: int = 12) -> bool
             if words[i : i + w] == words[i + w : i + 2 * w]:
                 return True
     return False
+
+
+def count_energy_bursts(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    window_seconds: float = SILENCE_WINDOW_SECONDS,
+    rms_threshold: float = BURST_RMS_THRESHOLD,
+) -> int:
+    """Conta rajadas de energia no áudio — aproximação de "quantas vezes a
+    fala soou", pelo mesmo método usado à mão no achado do `seg0009`
+    (T0.19, ver docs/moss_tts_investigation.md): janela de RMS acima do
+    limiar começando logo depois de uma janela abaixo é UMA rajada nova.
+
+    Sinal independente do ASR, pra desempatar `has_repetition`: loop real
+    no áudio soa fisicamente mais vezes que o esperado; alucinação do
+    Whisper (texto repetido na TRANSCRIÇÃO, áudio intacto) não muda o
+    número de rajadas reais. Correlaciona com contagem de PALAVRAS da
+    referência, não de sílabas — ver `loop_confirmed_by_bursts`.
+    """
+    window = max(1, int(window_seconds * sample_rate))
+    n_windows = len(audio) // window
+    if n_windows == 0:
+        return 0
+    trimmed = audio[: n_windows * window].reshape(n_windows, window)
+    rms = np.sqrt(np.mean(trimmed.astype(np.float64) ** 2, axis=1))
+    voiced = rms >= rms_threshold
+    return int(np.sum(voiced[1:] & ~voiced[:-1])) + int(voiced[0])
+
+
+def loop_confirmed_by_bursts(
+    burst_count: int, expected_words: int, *, margin: float = LOOP_BURST_MARGIN
+) -> bool:
+    """`burst_count` muito acima do esperado confirma loop real no áudio,
+    em vez de alucinação do Whisper na transcrição (T0.19) — ver
+    `count_energy_bursts`.
+
+    Comparação é com a contagem de PALAVRAS da referência, não de
+    sílabas — achado real desta tarefa: `count_energy_bursts` mede rajada
+    no nível de palavra/frase curta, não núcleo fonético por sílaba.
+    Confirmado em dois pontos de dado real: o `seg0009` documentado (5
+    palavras, 5-6 rajadas) e o teste de mutação da T0.19 (10 palavras,
+    ~12 rajadas numa cópia, ~24 em duas coladas) — comparar contra sílabas
+    (23 nesse segundo caso) deixava até a frase colada 2x invisível ao
+    limiar (24 não passa de 23×1,5).
+
+    Referência sem nenhuma palavra esperada (texto vazio) não tem base de
+    comparação — qualquer rajada conta como suspeita nesse caso raro.
+    """
+    if expected_words <= 0:
+        return burst_count > 0
+    return burst_count > expected_words * margin
 
 
 def traducao_infiel(
@@ -345,6 +412,7 @@ class QualityFlags:
     entonacao_desalinhada: bool = False
     emocao_incompativel: bool = False
     cer_final_alto: bool = False
+    loop_confirmado: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

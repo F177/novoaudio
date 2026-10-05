@@ -154,9 +154,8 @@ Antes de dizer que uma tarefa está pronta, rode `make lint && make test`.
 - Flags por segmento em `quality.py`; agregação em `scorecard.py`. `traducao_infiel` e `locutor_suspeito` ainda são stubs.
 - **A métrica do portão da Fase 0 é a taxa de correção medida por rótulo humano (T0.28), não `any_flag_rate`.** As flags são proxies até serem calibradas contra rótulos.
 - Todos os limiares são pontos de partida não calibrados: `CER_THRESHOLD=0.15`, `EMOTION_SIMILARITY_THRESHOLD=0.5`, `PROSODY_CORRELATION_THRESHOLD=0.3`, bandas do veredito 20%/50%. **Nunca ajuste um limiar contra um vídeo só** — o produto recebe uploads arbitrários.
-- Problemas conhecidos de medição:
-  - O "CER final" transcreve o segmento **antes** da mixagem, não depois. Por isso saiu idêntico ao CER do candidato (T0.19).
-  - O `evaluate` decodifica com `repetition_penalty=1.3` e `no_repeat_ngram_size=3` para conter alucinação do Whisper; efeito colateral: o ASR não consegue transcrever repetição real, e `has_repetition` fica praticamente cego para loop do TTS (T0.19).
+- T0.19 (feito, 2026-10-05): `cer_final` agora transcreve o segmento recortado do `final_audio.wav` MIXADO (pós timeline + fundo + normalização), não mais o segmento seco pré-mix. `evaluate` não decodifica mais com `repetition_penalty`/`no_repeat_ngram_size` — a disambiguação entre loop real e alucinação do Whisper usa `quality.count_energy_bursts`/`loop_confirmed_by_bursts` (rajadas de energia no áudio seco vs. PALAVRAS esperadas da tradução — não sílabas, ver `docs/moss_tts_investigation.md`). Novo campo `QualityFlags.loop_confirmado`. Achado real do piso remedido (n=24): média subiu de 0,0127 para 0,0417 (0,0168 sem 1 outlier); referência muito curta (poucas palavras) corre risco de falso positivo em `cer_final_alto` por inserção alucinada do Whisper — risco conhecido, não corrigido.
+- Problemas conhecidos de medição ainda abertos:
   - A correlação de prosódia é medida depois da transferência de envelope, então mede em parte a própria correção (T0.20).
   - `packages/ptbr/normalize.py` só é usado no CER, não no texto que vai para o TTS (T0.22).
 - `diagnostics.py` está congelado: não adicione entradas antes da T0.28.

@@ -101,7 +101,7 @@ O trabalho pendente foi commitado (`783a872`), mas com mensagem "a" e tudo num c
 
 **Aceite:** CI verde. Teste de que a entrada do histórico inclui os dois campos. Execução com working tree sujo aparece marcada no dashboard.
 
-### T0.19 — Instrumento de avaliação confiável 🤝
+### T0.19 — Instrumento de avaliação confiável 🤝 (feito, 2026-10-05)
 Três problemas no instrumento que mede todo o resto:
 
 1. **O "CER final" não é pós-mix.** `scripts/dub.py` transcreve `final_segments/<seg>.wav`, que é o segmento depois da transferência de envelope, mas antes de entrar na timeline, ser mixado com o fundo e normalizado. Como a transferência só mexe em ganho e o decoder é determinístico, a transcrição sai igual à do candidato — por isso `avg_cer_final == avg_cer`. Sem `--prosody-transfer` é literalmente o mesmo áudio transcrito duas vezes. Recorte cada segmento do `final_audio.wav` mixado, na janela em que ele foi posicionado: é ali que fundo alto, sobreposição com vizinho e corte no fim da timeline aparecem.

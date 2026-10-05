@@ -32,3 +32,9 @@ Thumbs.db
 calibration_data/
 translation_data/
 reports/
+
+# Exceção: fixture de áudio real usada no teste de regressão da T0.19
+# (packages/pipeline/tests/test_quality.py) — pequeno (86KB), determinístico,
+# amarra count_energy_bursts ao achado real do seg0009 documentado em
+# docs/moss_tts_investigation.md, não dado sintético inventado.
+!packages/pipeline/tests/fixtures/seg0009_base.wav

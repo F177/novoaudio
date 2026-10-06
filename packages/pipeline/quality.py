@@ -466,6 +466,7 @@ class QualityFlags:
     emocao_incompativel: bool = False
     cer_final_alto: bool = False
     loop_confirmado: bool = False
+    segmento_curto: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

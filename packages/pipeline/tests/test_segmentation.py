@@ -165,3 +165,108 @@ def test_segments_do_not_overlap_and_cover_every_word() -> None:
     assert segments[-1].t_fim == words[-1].end
     total_words = sum(len(seg.texto.split()) for seg in segments)
     assert total_words == len(words)
+
+
+def test_short_segment_never_merges_across_speaker_change() -> None:
+    # T0.21: diálogo A/B/A do critério de aceite — "Yes." (B) é curto
+    # demais (0,3s, 1 palavra) mas os únicos vizinhos são do locutor A,
+    # então não funde: fica como está e vem marcado `curto=True`. As duas
+    # falas de A duram >= 3,2s cada, então elas NÃO ficam marcadas — só o
+    # "Yes." isolado entre elas.
+    words = [
+        Word("Are", 0.0, 1.0, speaker="A"),
+        Word("you", 1.0, 2.0, speaker="A"),
+        Word("ready?", 2.0, 3.3, speaker="A"),  # 3,3s, dura >= min_duration
+        Word("Yes.", 4.0, 4.3, speaker="B"),  # 0,3s, 1 palavra: curto demais
+        Word("Then", 5.0, 5.8, speaker="A"),
+        Word("let's", 5.8, 6.6, speaker="A"),
+        Word("go", 6.6, 7.4, speaker="A"),
+        Word("now", 7.4, 8.3, speaker="A"),  # 3,3s, dura >= min_duration
+    ]
+    segments = segment_words(words, min_duration=3.2, min_word_count=1)
+
+    assert len(segments) == 3
+    assert segments[0].texto == "Are you ready?"
+    assert segments[0].speaker == "A"
+    assert segments[0].curto is False
+
+    assert segments[1].texto == "Yes."
+    assert segments[1].speaker == "B"
+    assert segments[1].curto is True
+
+    assert segments[2].texto == "Then let's go now"
+    assert segments[2].speaker == "A"
+    assert segments[2].curto is False
+
+
+def test_short_segment_at_start_with_no_same_speaker_neighbor_is_marked() -> None:
+    # sem vizinho ALGUM do mesmo locutor (nem antes, nem depois) — tem que
+    # ficar como está, marcado, não só no caso do meio do diálogo.
+    words = [
+        Word("Oi.", 0.0, 0.3, speaker="A"),
+        Word("Tudo", 1.0, 1.4, speaker="B"),
+        Word("bem", 1.4, 1.8, speaker="B"),
+        Word("com", 1.8, 2.2, speaker="B"),
+        Word("voce", 2.2, 4.5, speaker="B"),
+    ]
+    segments = segment_words(words, min_duration=3.2, min_word_count=1)
+
+    assert len(segments) == 2
+    assert segments[0].texto == "Oi."
+    assert segments[0].curto is True
+    assert segments[1].curto is False
+
+
+def test_short_groups_of_same_speaker_still_merge_as_before() -> None:
+    # T0.21, critério de aceite: fusão de grupos curtos do MESMO locutor
+    # continua funcionando igual — mesmo cenário de
+    # test_short_isolated_segment_is_merged_into_a_neighbor, agora com
+    # locutor explícito nos dois lados (em vez de None) pra confirmar que
+    # a checagem de compatibilidade não bloqueia esse caso.
+    words = [
+        Word("A", 0.0, 0.5, speaker="S1"),
+        Word("B", 1.0, 1.15, speaker="S1"),
+        Word("C", 1.75, 3.0, speaker="S1"),
+    ]
+    segments = segment_words(words, min_word_count=1)
+
+    assert len(segments) == 2
+    for seg in segments:
+        assert seg.t_fim - seg.t_inicio >= 0.3
+        assert seg.curto is False
+    assert segments[1].texto == "B C"
+
+
+def test_dominant_speaker_picks_speaker_with_most_total_duration() -> None:
+    # locutor B fala só uma palavra curta no início, A fala o resto — a
+    # versão antiga (primeira palavra com speaker) erraria pra B. Palavra
+    # ponte sem locutor (`bridge`) é necessária pra tudo ficar num grupo
+    # só: `_break_into_groups` só detecta troca de locutor entre palavras
+    # ADJACENTES com locutor conhecido nos dois lados — B direto ao lado
+    # de A quebraria o grupo (comportamento correto e intencional,
+    # inalterado por esta tarefa); com uma palavra sem locutor no meio,
+    # a troca "atravessa" sem quebrar, criando o grupo misto que
+    # `_dominant_speaker` precisa resolver escolhendo por duração.
+    words = [
+        Word("Hm", 0.0, 0.2, speaker="B"),
+        Word("bridge", 0.22, 0.3, speaker=None),
+        Word("Então", 0.32, 1.0, speaker="A"),
+        Word("é", 1.0, 1.2, speaker="A"),
+        Word("isso", 1.2, 2.0, speaker="A"),
+    ]
+    segments = segment_words(words, min_word_count=1)
+
+    assert len(segments) == 1
+    assert segments[0].speaker == "A"
+
+
+def test_dominant_speaker_none_when_no_speaker_assigned() -> None:
+    words = [Word("A", 0.0, 0.5), Word("B", 0.6, 1.0)]
+    segments = segment_words(words)
+    assert segments[0].speaker is None
+
+
+def test_dominant_speaker_single_speaker_group() -> None:
+    words = [Word("A", 0.0, 0.5, speaker="S1"), Word("B", 0.6, 1.0, speaker="S1")]
+    segments = segment_words(words)
+    assert segments[0].speaker == "S1"

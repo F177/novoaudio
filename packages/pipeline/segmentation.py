@@ -19,19 +19,24 @@ o segmento, mas fica registrado em `pausas_internas` — é isso que
 ignorados por completo (nem quebram, nem viram pausa registrada).
 
 Depois de quebrar, segmentos mais curtos que `min_duration` são fundidos a
-um vizinho (a pausa real que os isolava não desaparece — vira uma pausa
-interna, possivelmente longa, dentro do segmento fundido). Isso é o que
-garante o "nenhum segmento <0,3s" do critério de aceite mesmo quando uma
-interjeição curta fica isolada por âncoras duras dos dois lados.
+um vizinho do MESMO locutor (a pausa real que os isolava não desaparece —
+vira uma pausa interna, possivelmente longa, dentro do segmento fundido).
+Isso é o que garante o "nenhum segmento <0,3s" do critério de aceite mesmo
+quando uma interjeição curta fica isolada por âncoras duras dos dois
+lados. Fusão NUNCA atravessa troca de locutor (T0.21) — misturaria a fala
+de duas pessoas num segmento só, distorcendo a tradução. Um grupo curto
+sem vizinho do mesmo locutor fica como está, marcado `curto=True`
+(`Segment.curto`, exposto no editor como a flag `segmento_curto`).
 
 Segmentos com poucas palavras (`min_word_count`) são fundidos do mesmo
-jeito, mesmo quando já duram mais que `min_duration` — achado real da
-investigação de qualidade do MOSS-TTS (`docs/moss_tts_investigation.md`):
-uma frase/palavra isolada sem contexto ao redor falha na síntese mesmo com
-orçamento de tempo grande (testado até 8s pra uma palavra só, sem
-melhorar) — o problema é a falta de CONTEXTO linguístico, não de tempo.
-Fundir aqui, antes da tradução, garante que o texto traduzido carrega mais
-conteúdo real, em vez de só esticar o áudio de uma palavra isolada.
+jeito (mesma regra de locutor), mesmo quando já duram mais que
+`min_duration` — achado real da investigação de qualidade do MOSS-TTS
+(`docs/moss_tts_investigation.md`): uma frase/palavra isolada sem
+contexto ao redor falha na síntese mesmo com orçamento de tempo grande
+(testado até 8s pra uma palavra só, sem melhorar) — o problema é a falta
+de CONTEXTO linguístico, não de tempo. Fundir aqui, antes da tradução,
+garante que o texto traduzido carrega mais conteúdo real, em vez de só
+esticar o áudio de uma palavra isolada.
 """
 
 from __future__ import annotations
@@ -66,9 +71,16 @@ class Segment:
     texto: str
     speaker: str | None
     pausas_internas: list[InternalPause] = field(default_factory=list)
+    # T0.21: True quando o segmento ficou mais curto que `min_duration`
+    # (ou com menos palavras que `min_word_count`) mas NENHUM vizinho do
+    # mesmo locutor estava disponível pra fundir — fica como está em vez
+    # de fundir através de uma troca de locutor (o que distorceria a
+    # tradução, misturando falas de pessoas diferentes). Visível no
+    # editor como a flag `segmento_curto` (ver `quality.QualityFlags`).
+    curto: bool = False
 
 
-_WordGroup = tuple[list[Word], list[InternalPause]]
+_WordGroup = tuple[list[Word], list[InternalPause], bool]
 
 
 def segment_words(
@@ -96,8 +108,9 @@ def segment_words(
             texto=" ".join(w.text for w in group_words),
             speaker=_dominant_speaker(group_words),
             pausas_internas=pauses,
+            curto=curto,
         )
-        for group_words, pauses in groups
+        for group_words, pauses, curto in groups
     ]
 
 
@@ -123,9 +136,24 @@ def _break_into_groups(
     return groups
 
 
+def _group_speaker(group: list[Word]) -> str | None:
+    for w in group:
+        if w.speaker is not None:
+            return w.speaker
+    return None
+
+
+def _mergeable(a: list[Word], b: list[Word]) -> bool:
+    """Dois grupos podem se fundir se não tiverem locutores DIFERENTES e
+    conhecidos — `None` (sem diarização) nunca bloqueia, mesmo critério
+    já usado em `_break_into_groups` pra decidir troca de locutor."""
+    speaker_a, speaker_b = _group_speaker(a), _group_speaker(b)
+    return speaker_a is None or speaker_b is None or speaker_a == speaker_b
+
+
 def _merge_short_groups(
     groups: list[list[Word]], *, min_duration: float, max_duration: float, min_word_count: int = 1
-) -> list[list[Word]]:
+) -> list[tuple[list[Word], bool]]:
     def duration(group: list[Word]) -> float:
         return group[-1].end - group[0].start
 
@@ -139,32 +167,53 @@ def _merge_short_groups(
         for i, group in enumerate(merged):
             if not is_too_short(group):
                 continue
-            if i + 1 < len(merged) and duration(group + merged[i + 1]) <= max_duration:
+            # T0.21: fusão nunca atravessa troca de locutor — um grupo
+            # curto sem vizinho do MESMO locutor fica como está (marcado
+            # abaixo), em vez de fundir com o vizinho errado e misturar
+            # a fala de duas pessoas num segmento só.
+            if (
+                i + 1 < len(merged)
+                and _mergeable(group, merged[i + 1])
+                and duration(group + merged[i + 1]) <= max_duration
+            ):
                 merged[i : i + 2] = [group + merged[i + 1]]
-            elif i > 0 and duration(merged[i - 1] + group) <= max_duration:
+            elif (
+                i > 0
+                and _mergeable(merged[i - 1], group)
+                and duration(merged[i - 1] + group) <= max_duration
+            ):
                 merged[i - 1 : i + 1] = [merged[i - 1] + group]
             else:
                 continue
             changed = True
             break
 
-    return merged
+    return [(group, is_too_short(group)) for group in merged]
 
 
-def _mark_weak_pauses(groups: list[list[Word]], *, weak_pause_min: float) -> list[_WordGroup]:
+def _mark_weak_pauses(
+    groups: list[tuple[list[Word], bool]], *, weak_pause_min: float
+) -> list[_WordGroup]:
     result: list[_WordGroup] = []
-    for group in groups:
+    for group, curto in groups:
         pauses: list[InternalPause] = []
         for i, (prev, curr) in enumerate(zip(group, group[1:], strict=False)):
             gap = curr.start - prev.end
             if gap >= weak_pause_min:
                 pauses.append(InternalPause(after_word_index=i, duration=gap))
-        result.append((group, pauses))
+        result.append((group, pauses, curto))
     return result
 
 
 def _dominant_speaker(words: list[Word]) -> str | None:
+    """Locutor com mais tempo de fala no grupo (T0.21) — não o da
+    primeira palavra, que erra quando um locutor fala só uma palavra
+    curta no início e o resto do grupo é de outro locutor."""
+    totals: dict[str, float] = {}
     for w in words:
-        if w.speaker is not None:
-            return w.speaker
-    return None
+        if w.speaker is None:
+            continue
+        totals[w.speaker] = totals.get(w.speaker, 0.0) + (w.end - w.start)
+    if not totals:
+        return None
+    return max(totals, key=lambda speaker: totals[speaker])

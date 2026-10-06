@@ -500,6 +500,7 @@ def run_pipeline(
                             {"after_word_index": p.after_word_index, "duration": p.duration}
                             for p in s.pausas_internas
                         ],
+                        "curto": s.curto,
                     }
                     for i, s in enumerate(segments)
                 ],
@@ -798,6 +799,11 @@ def run_pipeline(
                     if source_pitch_std is not None and dub_pitch_std is not None
                     else False
                 ),
+                # T0.21: segmentation.py marca `curto=True` quando o grupo
+                # ficou abaixo do piso de duração/palavras mas não tinha
+                # vizinho do MESMO locutor pra fundir — fica como está em
+                # vez de misturar a fala de duas pessoas.
+                segmento_curto=s.curto,
                 # `emocao_incompativel` fica False aqui e é corrigido depois do
                 # loop (ver bloco "avaliação de emoção" abaixo) — precisa do
                 # lote inteiro pronto pra rodar o modelo remoto uma vez só.

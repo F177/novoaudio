@@ -23,6 +23,7 @@ def _flags(**overrides: bool) -> dict[str, bool]:
         "emocao_incompativel": False,
         "cer_final_alto": False,
         "loop_confirmado": False,
+        "segmento_curto": False,
     }
     base.update(overrides)
     return base

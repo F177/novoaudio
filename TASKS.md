@@ -117,7 +117,7 @@ Três problemas no instrumento que mede todo o resto:
 
 **Aceite:** teste com sinal sintético mostrando que a transferência de envelope não altera a nova métrica de entonação. Checagem do emotion2vec documentada com números. Scorecard mostra a matriz de sobreposição.
 
-### T0.21 — Segmentação respeita troca de locutor 🤖
+### T0.21 — Segmentação respeita troca de locutor 🤖 (feito, 2026-10-05)
 `packages/pipeline/segmentation.py`. `_break_into_groups` separa por locutor, mas `_merge_short_groups` funde grupos curtos com o vizinho sem olhar o locutor. Com `min_duration=3,2 s` (como `dub.py` chama), o diálogo "Are you ready?" (A) / "Yes." (B) / "Then let's go now" (A) vira um segmento só, atribuído a A. E `_dominant_speaker` devolve o locutor da primeira palavra, não o dominante. Hoje isso fica escondido porque toda síntese usa a mesma voz, mas já distorce a tradução (falas de duas pessoas chegam como uma frase só) e vira bug de produto assim que houver voz por locutor (T1.7, T2.6).
 
 Fusão nunca atravessa troca de locutor. Grupo curto sem vizinho do mesmo locutor fica como está e recebe uma flag nova, `segmento_curto`, visível no editor, em vez de ser fundido em silêncio. `_dominant_speaker` passa a escolher por duração.

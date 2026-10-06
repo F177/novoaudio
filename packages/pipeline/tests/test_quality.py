@@ -274,4 +274,5 @@ def test_quality_flags_serializes_to_json() -> None:
         "emocao_incompativel": False,
         "cer_final_alto": False,
         "loop_confirmado": False,
+        "segmento_curto": False,
     }

@@ -34,6 +34,7 @@ FLAG_NAMES = (
     "emocao_incompativel",
     "cer_final_alto",
     "loop_confirmado",
+    "segmento_curto",
 )
 
 VERDICT_APROVADO = "aprovado"

@@ -123,7 +123,7 @@ Três problemas no instrumento que mede todo o resto:
 Fusão nunca atravessa troca de locutor. Grupo curto sem vizinho do mesmo locutor fica como está e recebe uma flag nova, `segmento_curto`, visível no editor, em vez de ser fundido em silêncio. `_dominant_speaker` passa a escolher por duração.
 **Aceite:** o diálogo A/B/A acima produz três segmentos, com "Yes." atribuído a B e marcado. Teste de `_dominant_speaker` por duração. Fusão de grupos curtos do mesmo locutor continua igual.
 
-### T0.22 — Texto que chega ao TTS 🤖
+### T0.22 — Texto que chega ao TTS 🤖 (feito, 2026-10-05)
 `packages/ptbr/normalize.py` (T0.3) só é usado dentro do cálculo de CER; nunca é aplicado ao texto enviado ao MOSS-TTS. Nos vídeos de `phase1test/`, o TTS recebeu "q", "vcs", "6X" e "D6" crus — e o CER, que normaliza os dois lados, esconde isso.
 - Aplique `normalize` no caminho de síntese, em ordem compatível com o glossário IPA.
 - Acrescente abreviações de chat ao normalizador (q, vc, vcs, pq, tb, tbm).

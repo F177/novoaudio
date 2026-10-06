@@ -219,6 +219,35 @@ _UNIT_PATTERN = re.compile(
 )
 _ORDINAL_PATTERN = re.compile(r"\b(\d+)([ºª])")
 _ACRONYM_PATTERN = re.compile(r"\b[A-ZÀÂÃÉÊÍÓÔÕÚÇ]{2,}\b")
+# T0.22: achado real em phase1test/ — o MOSS-TTS recebeu "q", "vcs" e
+# outras abreviações de chat CRUAS (`normalize` nunca era aplicado no
+# caminho de síntese, só no cálculo de CER, que normaliza os dois lados e
+# por isso escondia o problema). Diferente de `_ABBREVIATIONS` acima
+# (formais, com ponto, casamento sensível a maiúscula/minúscula): essas
+# são informais, sem ponto, e precisam casar em qualquer caixa (chat real
+# mistura "vc"/"Vc"/"VC").
+_CHAT_ABBREVIATIONS = {
+    "q": "que",
+    "vc": "você",
+    "vcs": "vocês",
+    "pq": "porque",
+    "tb": "também",
+    "tbm": "também",
+}
+_CHAT_ABBREV_ALTERNATION = "|".join(
+    re.escape(k) for k in sorted(_CHAT_ABBREVIATIONS, key=len, reverse=True)
+)
+_CHAT_ABBREV_PATTERN = re.compile(r"\b(" + _CHAT_ABBREV_ALTERNATION + r")\b", re.IGNORECASE)
+
+
+def _sub_chat_abbrev(match: re.Match[str]) -> str:
+    matched = match.group(1)
+    replacement = _CHAT_ABBREVIATIONS[matched.lower()]
+    if matched[0].isupper():
+        return replacement[0].upper() + replacement[1:]
+    return replacement
+
+
 _ABBREV_PATTERN = re.compile(
     r"\b(" + "|".join(re.escape(k) for k in sorted(_ABBREVIATIONS, key=len, reverse=True)) + r")"
 )
@@ -317,5 +346,6 @@ def normalize(text: str) -> str:
     text = _ORDINAL_PATTERN.sub(_sub_ordinal, text)
     text = _ACRONYM_PATTERN.sub(_sub_acronym, text)
     text = _ABBREV_PATTERN.sub(lambda m: _ABBREVIATIONS[m.group(1)], text)
+    text = _CHAT_ABBREV_PATTERN.sub(_sub_chat_abbrev, text)
     text = _PLAIN_NUMBER_PATTERN.sub(_sub_plain_number, text)
     return text

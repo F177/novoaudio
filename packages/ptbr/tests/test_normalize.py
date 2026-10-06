@@ -155,6 +155,16 @@ NORMALIZE_CASES = {
     "Comprei 3 livros": "Comprei três livros",
     "O total é 1000000": "O total é um milhão",
     "São 2024 habitantes": "São dois mil e vinte e quatro habitantes",
+    # Abreviações de chat (T0.22) — o texto que chega ao TTS, não só o
+    # usado pra calcular CER
+    "q isso": "que isso",
+    "vc viu": "você viu",
+    "vcs viram": "vocês viram",
+    "pq não": "porque não",
+    "tb vou": "também vou",
+    "tbm concordo": "também concordo",
+    "Vc e Pq": "Você e Porque",  # casa em qualquer caixa, preserva maiúscula inicial
+    "aquilo": "aquilo",  # "q" não casa dentro de outra palavra
 }
 
 

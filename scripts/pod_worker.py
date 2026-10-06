@@ -286,10 +286,9 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
     from packages.pipeline.synthesis import (
         MIN_SYNTHESIS_SECONDS,
         adjust_tokens_for_retry,
-        apply_ipa_overrides,
         duration_to_tokens,
-        inject_pauses,
         is_within_tolerance,
+        prepare_synthesis_text,
         time_stretch_to_duration,
     )
 
@@ -438,8 +437,14 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
             InternalPause(after_word_index=p["after_word_index"], duration=p["duration"])
             for p in job.get("pausas_internas", [])
         ]
-        text = apply_ipa_overrides(job["translated_text"], job.get("glossary", {}))
-        text = inject_pauses(text, pausas, job.get("original_word_count", 0))
+        # T0.22: normaliza + aplica glossário IPA + injeta pausa, nessa
+        # ordem exata — ver `synthesis.prepare_synthesis_text`.
+        text = prepare_synthesis_text(
+            job["translated_text"],
+            job.get("glossary", {}),
+            pausas,
+            job.get("original_word_count", 0),
+        )
 
         reference = [job["reference_audio_path"]] if job.get("reference_audio_path") else None
         target_seconds = job["target_seconds"]

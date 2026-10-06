@@ -72,6 +72,30 @@ def test_parse_candidates_raises_when_nested_list_is_not_recoverable() -> None:
         parse_candidates(response)
 
 
+def test_parse_candidates_raises_on_leftover_list_bracket_residue() -> None:
+    # Achado real (T0.22, lego_batman seg0002): mesmo desaninhado, a
+    # string em si chegou ao TTS começando com "['" — colchete e aspas
+    # falados pelo MOSS-TTS, sem validação nenhuma. Diferente do caso de
+    # `[["texto"]]` acima (padrão exato, recuperável), aqui o resíduo fica
+    # DENTRO da string, sem jeito óbvio de limpar — rejeita pro retry.
+    response = json.dumps({"candidates": ["['Alguma fala aqui", "Olá."]})
+    with pytest.raises(ValueError, match="resíduo de estrutura"):
+        parse_candidates(response)
+
+
+def test_parse_candidates_raises_on_leading_quote_residue() -> None:
+    response = json.dumps({"candidates": ["'Alguma fala", "Olá."]})
+    with pytest.raises(ValueError, match="resíduo de estrutura"):
+        parse_candidates(response)
+
+
+def test_parse_candidates_allows_text_with_bracket_in_the_middle() -> None:
+    # só o INÍCIO da string é suspeito — colchete/aspas no meio de uma
+    # fala real (ex.: citação) não deve ser rejeitado
+    response = json.dumps({"candidates": ["Ele disse 'oi' pra mim", "Olá."]})
+    assert parse_candidates(response) == ["Ele disse 'oi' pra mim", "Olá."]
+
+
 def test_parse_candidates_ignores_extra_braces_after_the_real_json() -> None:
     # Achado real: o regex guloso antigo (`\{.*\}` com DOTALL) ia do
     # primeiro `{` até o ÚLTIMO `}` da resposta inteira — se o LLM

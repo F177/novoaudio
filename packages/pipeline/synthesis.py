@@ -63,6 +63,7 @@ import librosa
 import numpy as np
 
 from packages.pipeline.segmentation import InternalPause
+from packages.ptbr.normalize import normalize
 
 TOKENS_PER_SECOND = 12.5
 
@@ -159,6 +160,41 @@ def apply_ipa_overrides(text: str, glossary: dict[str, str]) -> str:
     for term, ipa in glossary.items():
         result = re.sub(re.escape(term), f"/{ipa}/", result, count=1, flags=re.IGNORECASE)
     return result
+
+
+def prepare_synthesis_text(
+    translated_text: str,
+    glossary: dict[str, str],
+    pausas: list[InternalPause],
+    original_word_count: int,
+) -> str:
+    """Monta o texto final que vai pro MOSS-TTS (T0.22, usado por
+    `scripts/pod_worker.py::cmd_synthesize`), nesta ordem:
+
+    1. `apply_ipa_overrides` primeiro — troca termo do glossário do canal
+       pela forma IPA fixa entre barras, enquanto o texto ainda está
+       como o tradutor devolveu. Achado real testando esta tarefa: se
+       `normalize` rodasse ANTES, um termo do glossário com dígito (ex.:
+       "GT3") seria corrompido ("GT3" -> "GTtrês") antes do glossário
+       conseguir achar a grafia original — a substituição falharia
+       silenciosamente.
+    2. `normalize` (números, abreviações formais e de chat) depois.
+       Achado real em `phase1test/`: o MOSS-TTS recebia "q", "vcs", "6X",
+       "D6" crus, porque `normalize` só era usado no cálculo de CER (que
+       normaliza os dois lados e por isso escondia o problema). Rodar
+       depois do passo 1 significa que o texto já tem `/ipa/` inserido —
+       achados reais de IPA neste repo não usam dígito nem abreviação
+       ASCII, então o risco de `normalize` alterar o conteúdo entre
+       barras é baixo na prática (não é uma blindagem matemática, é o
+       que os dados reais mostram).
+    3. `inject_pauses` por último — o marcador `[pause X.Ys]` tem um
+       número decimal; se `normalize` rodasse depois dele, esse número
+       seria expandido por extenso e o MOSS-TTS deixaria de reconhecer o
+       marcador (CLAUDE.md: consumido literal).
+    """
+    text = apply_ipa_overrides(translated_text, glossary)
+    text = normalize(text)
+    return inject_pauses(text, pausas, original_word_count)
 
 
 def infer_delivery_instruction(text: str) -> str | None:

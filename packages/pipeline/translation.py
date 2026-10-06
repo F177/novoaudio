@@ -129,6 +129,18 @@ def parse_candidates(llm_response: str) -> list[str]:
                 f"candidato não é uma string (veio {type(c).__name__}: {c!r:.80}) — "
                 "resposta do LLM provavelmente aninhou uma lista a mais"
             )
+        # T0.22, achado real (lego_batman seg0002): mesmo depois do
+        # desaninhamento acima, às vezes sobra resíduo de estrutura de
+        # lista/JSON NO TEXTO do candidato (`['Alguma fala`) — não é o
+        # padrão `[["texto"]]` conhecido e recuperável, é a string em si
+        # já corrompida. Chegou a ser mandado pro MOSS-TTS sintetizar
+        # colchete/aspas falados. Diferente do caso acima, aqui não tem
+        # recuperação óbvia — rejeita e deixa o retry tentar de novo.
+        if c.lstrip()[:1] in ("[", "]", "'", '"'):
+            raise ValueError(
+                f"candidato começa com resíduo de estrutura de lista/JSON "
+                f"(colchete ou aspas): {c!r:.80} — resposta do LLM corrompida"
+            )
         result.append(c)
     return result
 

@@ -11,6 +11,7 @@ from packages.pipeline.synthesis import (
     infer_delivery_instruction,
     inject_pauses,
     is_within_tolerance,
+    prepare_synthesis_text,
     time_stretch_to_duration,
 )
 
@@ -110,6 +111,44 @@ def test_apply_ipa_overrides_is_case_insensitive() -> None:
 def test_apply_ipa_overrides_leaves_text_unchanged_without_matches() -> None:
     text = "Nada a ver com o glossario aqui."
     assert apply_ipa_overrides(text, {"OpenAI": "oʊˈpɛn aɪ"}) == text
+
+
+def test_prepare_synthesis_text_normalizes_chat_abbreviations_and_numbers() -> None:
+    # T0.22, critério de aceite: o texto do job de síntese sai normalizado
+    # — achado real era o MOSS-TTS recebendo "q"/"vcs" crus.
+    result = prepare_synthesis_text("vc tem 25 anos", {}, [], 0)
+    assert "você tem vinte e cinco anos" == result
+
+
+def test_prepare_synthesis_text_still_applies_glossary_term() -> None:
+    # critério de aceite: termo do glossário continua sendo aplicado
+    result = prepare_synthesis_text(
+        "Eu uso OpenAI todo dia", {"OpenAI": "oʊˈpɛn aɪ"}, [], 0
+    )
+    assert "/oʊˈpɛn aɪ/" in result
+    assert "OpenAI" not in result
+
+
+def test_prepare_synthesis_text_does_not_normalize_inside_ipa_markers() -> None:
+    # critério de aceite: IPA entre barras não é alterado. O termo do
+    # glossário aqui ("GT3") tem um dígito de propósito — achado real
+    # testando esta tarefa: se `normalize` rodasse ANTES do
+    # `apply_ipa_overrides`, "GT3" virava "GTtrês" e o glossário não
+    # achava mais a grafia original pra substituir (substituição falhava
+    # em silêncio). Com `apply_ipa_overrides` primeiro, o termo é achado
+    # e trocado por `/ipa/` antes de `normalize` rodar, e o conteúdo
+    # entre barras (sem dígito, achado real de todo IPA deste repo) sai
+    # intacto.
+    result = prepare_synthesis_text("Fui no GT3 ontem", {"GT3": "dʒiː tiː θriː"}, [], 0)
+    assert "/dʒiː tiː θriː/" in result
+    assert "três" not in result
+
+
+def test_prepare_synthesis_text_injects_pause_after_normalize_and_glossary() -> None:
+    pausas = [InternalPause(after_word_index=0, duration=1.5)]
+    result = prepare_synthesis_text("vc viu", {}, pausas, 2)
+    assert result.startswith("você")
+    assert "[pause 1.5s]" in result
 
 
 def test_is_within_tolerance() -> None:

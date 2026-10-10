@@ -98,11 +98,14 @@ from packages.pipeline.scorecard import build_scorecard
 from packages.pipeline.segmentation import Segment, Word, segment_words
 from packages.pipeline.subtitles import build_srt
 from packages.pipeline.synthesis import MIN_SYNTHESIS_SECONDS, is_within_tolerance
-from packages.pipeline.translation import extract_proper_nouns
+from packages.pipeline.translation import WindowLine, build_windows, extract_proper_nouns
 from scripts import r2
 from scripts.pod_runner import PodConfig, download_from_pod, run_on_pod, upload_to_pod
 
 SYNTH_SAMPLE_RATE = 24000  # MOSS-TTS-v1.5, ver packages/pipeline/synthesis.py
+# Só pt-BR existe hoje; o código da tradução já recebe o idioma como dado
+# (`translation.LANGUAGES`) pra que um idioma novo não exija reescrita.
+TARGET_LANGUAGE = "pt-BR"
 
 
 def _is_bad_synthesis(reference_text: str, hypothesis_text: str) -> bool:
@@ -660,24 +663,39 @@ def run_pipeline(
     # reconhecível como recorrente olhando o vídeo todo, não a frase isolada
     # que cada job vê.
     preserve_terms = extract_proper_nouns([s.texto for s in segments])
-    translate_jobs = []
+    # T0.30: uma janela de diálogo por job (ver `translation.build_windows`).
+    # Locutor vira rótulo curto (A, B, ...) na ordem em que aparece — o
+    # modelo só precisa saber quem fala com quem pra resolver pronome.
+    speaker_labels: dict[str | None, str] = {}
+    for s in segments:
+        if s.speaker not in speaker_labels:
+            speaker_labels[s.speaker] = chr(ord("A") + len(speaker_labels))
+    lines: list[WindowLine] = []
+    target_syllables_by_id: dict[str, int] = {}
     for i, s in enumerate(segments):
+        seg_id = f"seg{i:04d}"
         pause_seconds = sum(p.duration for p in s.pausas_internas)
-        target_seconds = s.t_fim - s.t_inicio
-        target_syllables = syllables_that_fit(
-            target_seconds, calibration, pause_seconds=pause_seconds
+        target_syllables_by_id[seg_id] = max(
+            1, syllables_that_fit(s.t_fim - s.t_inicio, calibration, pause_seconds=pause_seconds)
         )
-        translate_jobs.append(
-            {
-                "id": f"seg{i:04d}",
-                "source_text": s.texto,
-                "target_syllables": max(1, target_syllables),
-                "previous_text": segments[i - 1].texto if i > 0 else None,
-                "next_text": segments[i + 1].texto if i < len(segments) - 1 else None,
-                "preserve_terms": preserve_terms,
-                "is_continuation": fala_fragmentada(s.texto),
-            }
-        )
+        lines.append(WindowLine(seg_id, speaker_labels[s.speaker], s.texto))
+
+    def line_json(line: WindowLine) -> dict[str, Any]:
+        return {"id": line.id, "speaker": line.speaker, "text": line.text}
+
+    translate_jobs = [
+        {
+            "id": f"win{w:03d}",
+            "context_before": [line_json(line) for line in context],
+            "lines": [
+                {**line_json(line), "target_syllables": target_syllables_by_id[line.id]}
+                for line in window
+            ],
+            "preserve_terms": preserve_terms,
+            "target_language": TARGET_LANGUAGE,
+        }
+        for w, (context, window) in enumerate(build_windows(lines))
+    ]
     translate_hash = _hash_json(translate_jobs)
     translations_path = cached("translations.json")
     if needs_stage(translations_path, "translate", translate_hash):
@@ -966,11 +984,8 @@ def run_pipeline(
                 # vizinho do MESMO locutor pra fundir — fica como está em
                 # vez de misturar a fala de duas pessoas.
                 segmento_curto=s.curto,
-                # Achado real (vídeo padrão): mesmo sinal usado em
-                # `translation.build_prompt(..., is_continuation=...)` —
-                # texto original começando em minúscula, continuação de
-                # frase cortada, risco elevado de perda de conteúdo/erro
-                # de referência na tradução.
+                # Texto original começando em minúscula: continuação de
+                # frase cortada, risco de perda de conteúdo na tradução.
                 fala_fragmentada=fala_fragmentada(s.texto),
                 # `emocao_incompativel` fica False aqui e é corrigido depois do
                 # loop (ver bloco "avaliação de emoção" abaixo) — precisa do

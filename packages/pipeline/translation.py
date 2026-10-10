@@ -37,102 +37,196 @@ from dataclasses import dataclass
 
 from packages.ptbr.syllables import count_syllables
 
-N_CANDIDATES = 5
+WINDOW_SIZE = 12
+WINDOW_CONTEXT_LINES = 3
 
-PROMPT_TEMPLATE = """Traduza a frase abaixo do inglês para português brasileiro falado, \
-natural, como um dublador de vídeo do YouTube diria. Gere {n_candidates} candidatos com \
-comprimentos diferentes, do mais compacto ao mais completo, todos fiéis ao sentido original \
-— sem perder nenhuma informação factual do texto de origem.
 
-Aproveite as alavancas do português falado sempre que fizer sentido: pro-drop (omitir sujeito \
-quando óbvio), voz ativa em vez de passiva, contrações do registro falado ("tá", "pra", "cê", \
-"tô", "né"). Não use abreviação de chat/internet em nenhum candidato (ex.: "vc", "pq", "q", \
-"tb", "tbm", "blz") — escreva essas palavras por extenso; só as contrações de fala citadas \
-acima são permitidas. Escreva tudo em português, só com o alfabeto latino — nunca troque \
-de idioma no meio da frase nem use caracteres chineses ou de outro alfabeto.
+@dataclass(frozen=True)
+class TargetLanguage:
+    """Tudo que a tradução sabe sobre o idioma de destino.
 
-Preserve a pontuação de ênfase do original ("!", "?", "...") — se a frase original exclama ou \
-pergunta, o candidato traduzido deve exclamar ou perguntar também, não virar uma afirmação \
-neutra. O sintetizador de voz não recebe indicação de tom além da pontuação do texto — perder \
-"!" nesse ponto é a única forma que ele tem de saber que a fala é emocionada, não narrada.
-{context_block}{continuation_block}{preserve_block}
-Frase original (inglês): "{source_text}"
-Orçamento aproximado: {target_syllables} sílabas — o candidato ideal fica perto disso, mas \
-prefira fidelidade e naturalidade a bater o número exato.
+    O produto só faz EN->pt-BR hoje, mas outros idiomas vêm depois
+    (decisão de 2026-10-10): regra específica de idioma mora aqui, como
+    dado, e não no prompt nem na validação compartilhados. Um idioma novo é
+    um perfil novo em `LANGUAGES`, sem mexer na lógica.
+    """
 
-Responda APENAS em JSON, sem markdown: {{"candidates": ["...", ...]}}"""
+    code: str
+    name: str
+    scripts: tuple[str, ...]
+    extra_letters: frozenset[str]
+    style_rules: tuple[str, ...]
 
-_CONTEXT_BLOCK_TEMPLATE = """
-Contexto (frases vizinhas no vídeo — NÃO traduza, só use pra entender a continuidade; \
-traduza apenas a "Frase original" abaixo):
-- Frase anterior (inglês): "{previous_text}"
-- Frase seguinte (inglês): "{next_text}"
+
+PT_BR = TargetLanguage(
+    code="pt-BR",
+    name="Brazilian Portuguese",
+    scripts=("LATIN",),
+    extra_letters=frozenset("ªº"),
+    style_rules=(
+        'Spoken register: use contractions such as "tá", "pra", "cê", "tô", "né" when they '
+        "sound natural.",
+        'Never use chat abbreviations ("vc", "vcs", "q", "pq", "tb", "tbm", "blz"); write the '
+        "words in full.",
+        '"you" addressing one person is "você" or "cê"; addressing several people is "vocês".',
+    ),
+)
+
+LANGUAGES: dict[str, TargetLanguage] = {PT_BR.code: PT_BR}
+
+# T0.30: o segmento deixou de ser a unidade de TRADUÇÃO (continua sendo a de
+# síntese e edição). Traduzido sozinho, mesmo com as frases vizinhas como
+# contexto, um 7B errava pronome ("Here you" -> "Aqui vcs"), perdia cláusula
+# de frase cortada entre segmentos ("for that." sumia) e deixava palavra em
+# inglês ("Job?") — ~6 de 13 falas erradas no Short padrão. Uma janela de
+# diálogo inteira por chamada deixa o modelo resolver tudo isso junto, e
+# custa menos: as instruções vão uma vez por janela, não uma por segmento.
+# Instruções em inglês e genéricas; o que é do idioma vem do `TargetLanguage`.
+WINDOW_PROMPT_TEMPLATE = """You dub YouTube Shorts from English into spoken {language}. Translate \
+every line below the way a native {language} dubbing actor would say it: natural and direct.
+
+Rules:
+- One translation per line, with the same "id". Do not merge or split lines. If a sentence is \
+cut across two lines, translate each piece in its own place, so that read in order they form \
+the complete sentence. Never split a word between two lines: every line holds whole words.
+- Translate ALL the content of every line. Do not summarize and do not add anything.
+- Keep profanity, slang, irony and intensity at exactly the original level. Do not soften, \
+censor or change the content.
+- Use the whole conversation to resolve pronouns and references (who is talking to whom).
+- Keep the original emphasis punctuation ("!", "?", "...").
+- Write only in {language}, in its own writing system. Do not leave English words, except \
+proper nouns and the terms listed below.
+{language_rules}{preserve_block}{context_block}
+Lines to translate (JSON):
+{lines_json}
+
+Reply ONLY with JSON, no markdown: {{"translations": [{{"id": "...", "text": "..."}}, ...]}}"""
+
+_WINDOW_PRESERVE_BLOCK = """
+Proper nouns and terms to keep exactly as written: {terms}
 """
 
-# T0.23+ achado real (vídeo padrão, revisão pedida pelo usuário depois de ver
-# erro real no vídeo): mesmo com o contexto acima, o modelo às vezes OMITE
-# parte do texto de um fragmento cortado no meio de uma frase (ex. "for
-# that." sumiu inteiro de "for that. What are you talking about?") ou
-# resolve pronome ambíguo errado (ex. "Here you" -> "Aqui vcs", plural
-# errado, quando o original é singular). `fala_fragmentada` (quality.py)
-# sinaliza isso de forma barata (primeira letra minúscula no texto
-# original — achado de que o WhisperX preserva a capitalização real da
-# fala, então minúscula no início É o segmento continuando uma frase, não
-# uma heurística aproximada). Quando sinalizado, a instrução abaixo é mais
-# direta que o bloco de contexto genérico: contexto é só pra resolver
-# referência, nunca motivo pra cortar conteúdo.
-_CONTINUATION_BLOCK_TEMPLATE = """
-ATENÇÃO: esta fala começa EM MEIO a uma frase (é a continuação de uma fala cortada por \
-pausa ou interrupção, não o início de uma frase nova — olhe a frase anterior no contexto \
-acima). Traduza TODO o conteúdo da frase original abaixo, palavra por palavra, mesmo que \
-pareça incompleta sozinha — não corte nenhuma cláusula achando que ela já foi dita no \
-contexto, e não resuma. O contexto serve SÓ para resolver pronome ou referência ambígua \
-("you", "it", "that", "her"), nunca para decidir o que omitir.
-
-Se o orçamento de sílabas abaixo for pequeno demais pra manter TODO esse conteúdo, gere \
-pelo menos um candidato mais longo que o orçamento, mas completo — não use o orçamento \
-como desculpa pra cortar parte da fala. Um candidato longo e fiel é melhor que um candidato \
-no tamanho certo que perdeu conteúdo: o sistema tem como comprimir áudio depois da síntese, \
-mas não tem como recuperar uma cláusula que a tradução já descartou.
-"""
-
-_PRESERVE_BLOCK_TEMPLATE = """
-Nomes próprios e termos recorrentes neste vídeo — mantenha-os sem tradução em todo \
-candidato, com a grafia exata: {terms}
+_WINDOW_CONTEXT_BLOCK = """
+Previous lines, for conversation context only — do NOT translate these:
+{context_json}
 """
 
 
-def build_prompt(
-    source_text: str,
-    target_syllables: int,
+@dataclass
+class WindowLine:
+    id: str
+    speaker: str | None
+    text: str
+
+
+def build_windows(
+    lines: list[WindowLine],
     *,
-    n_candidates: int = N_CANDIDATES,
-    previous_text: str | None = None,
-    next_text: str | None = None,
-    preserve_terms: list[str] | None = None,
-    is_continuation: bool = False,
-) -> str:
-    context_block = ""
-    if previous_text or next_text:
-        context_block = _CONTEXT_BLOCK_TEMPLATE.format(
-            previous_text=previous_text or "(nenhuma, início do vídeo)",
-            next_text=next_text or "(nenhuma, fim do vídeo)",
-        )
+    size: int = WINDOW_SIZE,
+    context_lines: int = WINDOW_CONTEXT_LINES,
+) -> list[tuple[list[WindowLine], list[WindowLine]]]:
+    """Fatia o vídeo em janelas de `size` falas, cada uma com as
+    `context_lines` falas anteriores (texto ORIGINAL) como contexto.
 
-    continuation_block = _CONTINUATION_BLOCK_TEMPLATE if is_continuation else ""
+    Contexto em inglês, não as traduções da janela anterior: assim as
+    janelas não dependem umas das outras e todas vão no mesmo lote de GPU —
+    um Short cabe em 1–2 janelas, então a perda de consistência é pequena.
+    """
+    return [
+        (lines[max(0, start - context_lines) : start], lines[start : start + size])
+        for start in range(0, len(lines), size)
+    ]
 
-    preserve_block = ""
-    if preserve_terms:
-        preserve_block = _PRESERVE_BLOCK_TEMPLATE.format(terms=", ".join(preserve_terms))
 
-    return PROMPT_TEMPLATE.format(
-        source_text=source_text,
-        target_syllables=target_syllables,
-        n_candidates=n_candidates,
-        context_block=context_block,
-        continuation_block=continuation_block,
-        preserve_block=preserve_block,
+def split_window(
+    context_before: list[WindowLine],
+    lines: list[WindowLine],
+    *,
+    context_lines: int = WINDOW_CONTEXT_LINES,
+) -> list[tuple[list[WindowLine], list[WindowLine]]]:
+    """Divide uma janela que falhou em duas metades, cada uma com contexto.
+
+    Achado real (NFL, fala rápida cheia de frase cortada): numa janela de
+    12 falas o modelo às vezes junta dois fragmentos numa fala só (um id
+    some) ou quebra o JSON — e repete o erro nas 3 tentativas, deixando 12
+    segmentos sem tradução. Janela menor erra menos; no limite, 1 fala com
+    contexto não tem como ser fundida com a vizinha.
+    """
+    half = len(lines) // 2
+    first, second = lines[:half], lines[half:]
+    second_context = (context_before + first)[-context_lines:] if context_lines else []
+    return [(context_before, first), (second_context, second)]
+
+
+def _lines_json(lines: list[WindowLine]) -> str:
+    return json.dumps(
+        [{"id": line.id, "speaker": line.speaker or "?", "text": line.text} for line in lines],
+        ensure_ascii=False,
+        indent=1,
     )
+
+
+def build_window_prompt(
+    lines: list[WindowLine],
+    language: TargetLanguage,
+    *,
+    context_before: list[WindowLine] | None = None,
+    preserve_terms: list[str] | None = None,
+) -> str:
+    language_rules = "".join(f"- {rule}\n" for rule in language.style_rules)
+    preserve_block = (
+        _WINDOW_PRESERVE_BLOCK.format(terms=", ".join(preserve_terms)) if preserve_terms else ""
+    )
+    context_block = (
+        _WINDOW_CONTEXT_BLOCK.format(context_json=_lines_json(context_before))
+        if context_before
+        else ""
+    )
+    return WINDOW_PROMPT_TEMPLATE.format(
+        language=language.name,
+        language_rules=language_rules,
+        preserve_block=preserve_block,
+        context_block=context_block,
+        lines_json=_lines_json(lines),
+    )
+
+
+def parse_window_response(
+    llm_response: str, expected_ids: list[str], language: TargetLanguage
+) -> dict[str, str]:
+    """Extrai {id: tradução} e exige exatamente uma tradução por fala pedida.
+
+    Qualquer desvio (id faltando, sobrando, texto vazio, resíduo de
+    estrutura, alfabeto que não é o do idioma) levanta `ValueError` — a
+    janela inteira é refeita, nunca aceita parcialmente: uma fala faltando
+    deixaria o segmento com o texto em inglês, e uma sobrando desalinharia
+    os ids.
+    """
+    data = json.loads(_extract_json_object(llm_response))
+    items = data.get("translations")
+    if not isinstance(items, list):
+        raise ValueError("JSON não tem a lista 'translations'")
+    result: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(f"item de tradução não é objeto: {item!r:.80}")
+        seg_id, text = item.get("id"), item.get("text")
+        if not isinstance(seg_id, str) or not isinstance(text, str) or not text.strip():
+            raise ValueError(f"item sem id ou texto: {item!r:.80}")
+        if seg_id in result:
+            raise ValueError(f"id repetido na resposta: {seg_id}")
+        if text.lstrip()[:1] in ("[", "]", "{", "}"):
+            raise ValueError(f"texto com resíduo de estrutura JSON: {text!r:.80}")
+        if has_disallowed_script(text, language):
+            raise ValueError(f"texto fora do alfabeto de {language.code}: {text!r:.80}")
+        result[seg_id] = text.strip()
+    if set(result) != set(expected_ids):
+        missing = sorted(set(expected_ids) - set(result))
+        extra = sorted(set(result) - set(expected_ids))
+        raise ValueError(
+            f"ids não batem com as falas pedidas (faltando {missing}, sobrando {extra})"
+        )
+    return result
 
 
 # T0.23: palavras capitalizadas comuns em início de frase no inglês falado de
@@ -300,7 +394,7 @@ def parse_candidates(llm_response: str) -> list[str]:
         # no meio da frase ("Ele foi derrubado, mas显而易见") nos 5 candidatos.
         # Descarta só o candidato contaminado; se nenhum sobrar, o retry tenta
         # de novo — nunca deixa outro alfabeto chegar no MOSS-TTS.
-        if has_foreign_script(c):
+        if has_disallowed_script(c, PT_BR):
             continue
         result.append(c)
     if not result:
@@ -311,13 +405,10 @@ def parse_candidates(llm_response: str) -> list[str]:
     return result
 
 
-_LATIN_EXTRA_LETTERS = {"ª", "º"}
+def has_disallowed_script(text: str, language: TargetLanguage) -> bool:
+    """Alguma letra fora do(s) sistema(s) de escrita do idioma de destino.
 
-
-def has_foreign_script(text: str) -> bool:
-    """Alguma letra fora do alfabeto latino (ª/º contam como latinas).
-
-    Usada em dois pontos: aqui, pra descartar candidato contaminado, e em
+    Usada em dois pontos: aqui, pra rejeitar tradução contaminada, e em
     `pod_worker.cmd_translate`, pra listar os tokens do vocabulário do Qwen
     que nunca podem ser gerados (`suppress_tokens`) — só o filtro depois da
     geração não bastava: no NFL seg0022 os 3 retries × 5 candidatos vazaram
@@ -325,8 +416,8 @@ def has_foreign_script(text: str) -> bool:
     """
     return any(
         ch.isalpha()
-        and ch not in _LATIN_EXTRA_LETTERS
-        and not unicodedata.name(ch, "").startswith("LATIN")
+        and ch not in language.extra_letters
+        and not unicodedata.name(ch, "").startswith(language.scripts)
         for ch in text
     )
 
@@ -350,15 +441,9 @@ _SPOKEN_MARKERS = ("tá", "pra", "né", " cê ", "tô", "vc")
 _EMPHASIS_CHARS = "!?"
 
 
-def score_candidate(
-    text: str, target_syllables: int, source_text: str, *, is_continuation: bool = False
-) -> ScoredCandidate:
+def score_candidate(text: str, target_syllables: int, source_text: str) -> ScoredCandidate:
     syllables = count_syllables(text)
-    budget_score = (
-        _budget_score_continuation(syllables, target_syllables)
-        if is_continuation
-        else _budget_score(syllables, target_syllables)
-    )
+    budget_score = _budget_score(syllables, target_syllables)
     naturalness_score = _naturalness_score(text)
     expressiveness_score = _expressiveness_score(source_text, text)
     score = (
@@ -377,46 +462,15 @@ def score_candidate(
 
 
 def rank_candidates(
-    candidates: list[str],
-    target_syllables: int,
-    source_text: str,
-    *,
-    is_continuation: bool = False,
+    candidates: list[str], target_syllables: int, source_text: str
 ) -> list[ScoredCandidate]:
     """Ordena os candidatos do melhor pro pior pela pontuação local.
 
     Não decide sozinho qual usar — só ordena. A escolha final no editor
     (T2.3) mostra os 5 com a contagem de sílabas, o humano troca com 1 clique.
     """
-    scored = [
-        score_candidate(c, target_syllables, source_text, is_continuation=is_continuation)
-        for c in candidates
-    ]
+    scored = [score_candidate(c, target_syllables, source_text) for c in candidates]
     return sorted(scored, key=lambda c: c.score, reverse=True)
-
-
-def _budget_score_continuation(syllables: int, target_syllables: int) -> float:
-    """Mesmo princípio de `_budget_score`, mas SÓ penaliza ficar mais CURTO
-    que o orçamento, nunca mais LONGO.
-
-    Achado real (vídeo padrão, 2026-10-09): pra fragmento de frase cortada
-    (`is_continuation`), um orçamento de sílabas apertado fazia os 5
-    candidatos gerados cortarem conteúdo pra caber (`_budget_score`
-    simétrico não distinguia "ficou mais longo pra manter tudo" de "ficou
-    mais longo por enrolação" — penalizava os dois igual). Sem essa
-    distinção, um candidato completo-mas-longo sempre perdia pro
-    candidato-curto-mas-incompleto na pontuação, mesmo com o prompt
-    pedindo pra priorizar completude. Fragmentos têm MOTIVO real pra \
-    passar do orçamento (preservar conteúdo); segmentos normais não — por
-    isso esta função só existe pro caso `is_continuation`, o resto do
-    pipeline continua com a penalidade simétrica de sempre.
-    """
-    if target_syllables <= 0:
-        return 0.0
-    if syllables >= target_syllables:
-        return 1.0
-    relative_error = (target_syllables - syllables) / target_syllables
-    return max(0.0, 1.0 - relative_error)
 
 
 def _budget_score(syllables: int, target_syllables: int) -> float:
@@ -449,7 +503,7 @@ def _expressiveness_score(source_text: str, candidate_text: str) -> float:
     a única alavanca implícita de entonação que ele usa de fato. Se a
     tradução perde o "!"/"?" do original, a síntese perde o único sinal
     que tinha pra soar menos "narrado" — daí o pedido explícito no prompt
-    (`PROMPT_TEMPLATE`) e essa pontuação reforçando quando ele funciona.
+    (`WINDOW_PROMPT_TEMPLATE`) e essa pontuação reforçando quando ele funciona.
 
     Não validado contra o modelo real ainda — hipótese com base num
     achado anterior, não medição nova desta mudança específica. Ver

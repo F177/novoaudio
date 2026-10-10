@@ -159,24 +159,28 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
 
 
 def cmd_translate(args: argparse.Namespace) -> None:
+    """Traduz janelas de diálogo (T0.30): cada job é uma janela de falas com
+    contexto; a saída continua um item por segmento (`id`, `candidates`),
+    no mesmo formato de antes, então nada a jusante muda."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from packages.pipeline.translation import (
-        N_CANDIDATES,
-        build_prompt,
-        has_foreign_script,
-        parse_candidates,
-        rank_candidates,
+        LANGUAGES,
+        WindowLine,
+        build_window_prompt,
+        has_disallowed_script,
+        parse_window_response,
+        score_candidate,
+        split_window,
     )
 
     model_id = "Qwen/Qwen2.5-7B-Instruct"
     device = "cuda"
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     # Geração em lote de um causal LM precisa de padding à esquerda (alinha
-    # o FIM de todos os prompts na mesma posição, senão cada linha começaria
-    # a gerar num índice diferente) e de um pad_token (Qwen não define um
-    # por padrão).
+    # o FIM de todos os prompts na mesma posição) e de um pad_token (Qwen
+    # não define um por padrão).
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -188,63 +192,52 @@ def cmd_translate(args: argparse.Namespace) -> None:
     # no meio da frase de forma sistemática pra certas entradas — 3 retries
     # × 5 candidatos, todos contaminados, mesmo com instrução no prompt.
     # Proibir na fonte: nenhum token cujo texto tenha letra fora do
-    # alfabeto latino pode ser gerado. Tokens de byte parcial (decodificam
+    # sistema de escrita do idioma de destino pode ser gerado. Tokens de byte parcial (decodificam
     # como U+FFFD) ficam liberados de propósito — o português também monta
-    # acentos a partir deles; `parse_candidates` segue como rede de
-    # segurança pro caso raro de um caractere estrangeiro montado por bytes.
+    # acentos a partir deles; `parse_window_response` segue como rede de
+    # segurança.
+    jobs = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    # Um idioma de destino por chamada (o vídeo inteiro vai pro mesmo idioma);
+    # a lista de tokens proibidos depende do sistema de escrita dele.
+    (language,) = {LANGUAGES[job["target_language"]] for job in jobs} or {LANGUAGES["pt-BR"]}
     suppressed_token_ids = [
         token_id
         for token_id in range(len(tokenizer))
-        if has_foreign_script(tokenizer.decode([token_id]))
+        if has_disallowed_script(tokenizer.decode([token_id]), language)
     ]
 
-    # Achado real 2026-09-18 (pedido explícito do usuário: reduzir tempo de
-    # ponta a ponta sem perder qualidade): `cmd_translate` fazia 1 chamada
-    # de `generate()` POR SEGMENTO, serial — para um vídeo com 90+
-    # segmentos, isso paga o overhead de forward-pass do zero 90 vezes,
-    # mesmo achado de T0.14b (gerar em lote custa quase o mesmo tempo de
-    # GPU que gerar 1) nunca tinha sido aplicado ENTRE segmentos, só entre
-    # candidatos do mesmo segmento (`cmd_synthesize`). Agora processa em
-    # lotes de até `TRANSLATE_BATCH_SIZE` segmentos por chamada. Lote
-    # limitado (não "todos de uma vez") de propósito — sem medição real de
-    # uso de memória num vídeo de 90+ segmentos com prompts longos, um lote
-    # sem limite arrisca CUDA OOM; 16 é uma margem de segurança, não medida
-    # no limite.
-    TRANSLATE_BATCH_SIZE = 16
+    # Lote limitado por segurança de memória (prompt de janela é maior que o
+    # de segmento). Janela que falha na validação (id faltando, JSON
+    # quebrado) é refeita inteira — nunca aceita pela metade, senão uma fala
+    # fundida na vizinha seria dita duas vezes. Depois de ATTEMPTS_PER_SIZE
+    # falhas, a janela é dividida ao meio (`split_window`), até 1 fala com
+    # contexto; uma fala sozinha que ainda falhar fica sem tradução (dub.py
+    # cai pro texto original) em vez de travar o vídeo.
+    BATCH_SIZE = 8
+    ATTEMPTS_PER_SIZE = 2
 
-    # Qwen às vezes não devolve JSON válido (achado real, 2x em bateladas de
-    # 90+ segmentos) — sem retry, 1 job ruim derrubava a tradução inteira do
-    # vídeo, mesmo com todos os outros já traduzidos certo. Reamostra (a
-    # geração é `do_sample=True`, então tentar de novo é uma chance real de
-    # sucesso, não repetir o mesmo erro) até MAX_TRANSLATE_ATTEMPTS; se nunca
-    # conseguir, esse UM segmento fica sem candidatos (dub.py cai pro texto
-    # original em inglês) em vez de travar os outros 89. Só os jobs que
-    # falharem são reenviados no próximo round — o lote encolhe a cada
-    # tentativa, não refaz trabalho já bem-sucedido.
-    MAX_TRANSLATE_ATTEMPTS = 3
+    def to_lines(items: list[dict]) -> list[WindowLine]:
+        return [WindowLine(i["id"], i.get("speaker"), i["text"]) for i in items]
 
-    jobs = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    preserve_terms = jobs[0].get("preserve_terms") if jobs else None
+    target_syllables = {line["id"]: line["target_syllables"] for j in jobs for line in j["lines"]}
+    source_text = {line["id"]: line["text"] for j in jobs for line in j["lines"]}
 
-    def build_prompt_text(job: dict) -> str:
-        n_candidates = job.get("n_candidates", N_CANDIDATES)
-        prompt = build_prompt(
-            job["source_text"],
-            job["target_syllables"],
-            n_candidates=n_candidates,
-            previous_text=job.get("previous_text"),
-            next_text=job.get("next_text"),
-            preserve_terms=job.get("preserve_terms"),
-            is_continuation=job.get("is_continuation", False),
+    def prompt_text(window: tuple[list[WindowLine], list[WindowLine]]) -> str:
+        context, lines = window
+        prompt = build_window_prompt(
+            lines, language, context_before=context, preserve_terms=preserve_terms
         )
         messages = [{"role": "user", "content": prompt}]
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-    def generate_batch(batch_jobs: list[dict]) -> list[str]:
-        texts = [build_prompt_text(job) for job in batch_jobs]
-        inputs = tokenizer(texts, return_tensors="pt", padding=True).to(device)
+    def generate_batch(windows: list) -> list[str]:
+        inputs = tokenizer(
+            [prompt_text(window) for window in windows], return_tensors="pt", padding=True
+        ).to(device)
         outputs = model.generate(
             **inputs,
-            max_new_tokens=1024,
+            max_new_tokens=2048,
             do_sample=True,
             temperature=0.7,
             suppress_tokens=suppressed_token_ids,
@@ -252,58 +245,55 @@ def cmd_translate(args: argparse.Namespace) -> None:
         prompt_len = inputs["input_ids"].shape[1]
         return [
             tokenizer.decode(outputs[i][prompt_len:], skip_special_tokens=True)
-            for i in range(len(batch_jobs))
+            for i in range(len(windows))
         ]
 
-    candidates_by_id: dict[str, list[str]] = {job["id"]: [] for job in jobs}
-    pending = list(jobs)
-    for attempt in range(1, MAX_TRANSLATE_ATTEMPTS + 1):
-        if not pending:
-            break
-        still_pending = []
-        for chunk_start in range(0, len(pending), TRANSLATE_BATCH_SIZE):
-            chunk = pending[chunk_start : chunk_start + TRANSLATE_BATCH_SIZE]
-            responses = generate_batch(chunk)
-            for job, response in zip(chunk, responses, strict=True):
+    translated: dict[str, str] = {}
+    # (contexto, falas, falhas no tamanho atual)
+    pending = [
+        (to_lines(job.get("context_before", [])), to_lines(job["lines"]), 0) for job in jobs
+    ]
+    while pending:
+        retry = []
+        for chunk_start in range(0, len(pending), BATCH_SIZE):
+            chunk = pending[chunk_start : chunk_start + BATCH_SIZE]
+            responses = generate_batch([(context, lines) for context, lines, _ in chunk])
+            for (context, lines, failures), response in zip(chunk, responses, strict=True):
                 try:
-                    candidates_by_id[job["id"]] = parse_candidates(response)
-                except ValueError as exc:
-                    print(
-                        f"[translate] job {job['id']}: tentativa {attempt}/"
-                        f"{MAX_TRANSLATE_ATTEMPTS} falhou ({exc})"
+                    translated.update(
+                        parse_window_response(response, [line.id for line in lines], language)
                     )
-                    still_pending.append(job)
-        pending = still_pending
+                    continue
+                except (ValueError, json.JSONDecodeError) as exc:
+                    print(f"[translate] {lines[0].id}..{lines[-1].id} ({len(lines)} falas) "
+                          f"falhou ({exc})")
+                failures += 1
+                if failures < ATTEMPTS_PER_SIZE:
+                    retry.append((context, lines, failures))
+                elif len(lines) > 1:
+                    retry.extend((c, ls, 0) for c, ls in split_window(context, lines))
+        pending = retry
 
     results = []
     for job in jobs:
-        candidates = candidates_by_id[job["id"]]
-        ranked = (
-            rank_candidates(
-                candidates,
-                job["target_syllables"],
-                job["source_text"],
-                is_continuation=job.get("is_continuation", False),
-            )
-            if candidates
-            else []
-        )
-        results.append(
-            {
-                "id": job["id"],
-                "candidates": [
+        for line in job["lines"]:
+            text = translated.get(line["id"])
+            candidates = []
+            if text is not None:
+                scored = score_candidate(
+                    text, target_syllables[line["id"]], source_text[line["id"]]
+                )
+                candidates.append(
                     {
-                        "text": c.text,
-                        "syllables": c.syllables,
-                        "budget_score": c.budget_score,
-                        "naturalness_score": c.naturalness_score,
-                        "expressiveness_score": c.expressiveness_score,
-                        "score": c.score,
+                        "text": scored.text,
+                        "syllables": scored.syllables,
+                        "budget_score": scored.budget_score,
+                        "naturalness_score": scored.naturalness_score,
+                        "expressiveness_score": scored.expressiveness_score,
+                        "score": scored.score,
                     }
-                    for c in ranked
-                ],
-            }
-        )
+                )
+            results.append({"id": line["id"], "candidates": candidates})
 
     Path(args.output).write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
 

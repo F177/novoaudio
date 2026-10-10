@@ -463,10 +463,9 @@ def fala_fragmentada(texto_original: str) -> bool:
     que ele às vezes omite uma cláusula inteira (`"for that."` sumiu de
     `"for that. What are you talking about?"`) ou resolve pronome errado
     (`"Here you"` -> `"Aqui vcs"`, plural, quando o original é singular).
-    `translation.build_prompt(..., is_continuation=True)` reage a este
-    mesmo sinal reforçando a instrução de não cortar conteúdo — esta
-    função expõe o MESMO sinal como flag pro editor, não calculado de
-    novo: ambos checam a mesma propriedade do texto original.
+    Desde a T0.30 a tradução é feita por janela de diálogo, que trata
+    fragmento cortado no próprio prompt; esta flag segue marcando o risco
+    pro editor.
 
     Heurística direta (não calculada por amostragem/calibração) — se um
     dia o WhisperX normalizar capitalização por conta própria, isso para

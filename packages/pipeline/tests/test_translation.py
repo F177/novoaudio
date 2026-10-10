@@ -3,76 +3,19 @@ import json
 import pytest
 
 from packages.pipeline.translation import (
-    build_prompt,
+    PT_BR,
+    TargetLanguage,
+    WindowLine,
+    build_window_prompt,
+    build_windows,
     extract_proper_nouns,
+    has_disallowed_script,
     parse_candidates,
+    parse_window_response,
     rank_candidates,
     score_candidate,
+    split_window,
 )
-
-
-def test_build_prompt_includes_source_text_and_budget() -> None:
-    prompt = build_prompt("The dog ran fast.", target_syllables=12)
-    assert "The dog ran fast." in prompt
-    assert "12 s" in prompt or "12 sílabas" in prompt
-
-
-def test_build_prompt_mentions_spoken_ptbr_levers() -> None:
-    prompt = build_prompt("Hello.", target_syllables=3)
-    assert "pro-drop" in prompt
-    assert "voz ativa" in prompt
-
-
-def test_build_prompt_asks_to_preserve_emphasis_punctuation() -> None:
-    prompt = build_prompt("Hello!", target_syllables=3)
-    assert "ênfase" in prompt
-
-
-def test_build_prompt_forbids_chat_abbreviations_but_keeps_spoken_contractions() -> None:
-    prompt = build_prompt("Hello.", target_syllables=3)
-    assert "abreviação de chat" in prompt
-    assert '"tá"' in prompt
-
-
-def test_build_prompt_without_context_omits_context_block() -> None:
-    prompt = build_prompt("Hello.", target_syllables=3)
-    assert "Contexto" not in prompt
-
-
-def test_build_prompt_includes_neighbor_context_but_marks_it_not_to_translate() -> None:
-    prompt = build_prompt(
-        "Hello.",
-        target_syllables=3,
-        previous_text="He ran fast.",
-        next_text="She won.",
-    )
-    assert "He ran fast." in prompt
-    assert "She won." in prompt
-    assert "NÃO traduza" in prompt
-
-
-def test_build_prompt_includes_preserve_terms() -> None:
-    prompt = build_prompt("Hello.", target_syllables=3, preserve_terms=["Hurts", "NFL"])
-    assert "Hurts" in prompt
-    assert "NFL" in prompt
-
-
-def test_build_prompt_without_preserve_terms_omits_preserve_block() -> None:
-    prompt = build_prompt("Hello.", target_syllables=3)
-    assert "preserve" not in prompt.lower() or "preserve_terms" not in prompt
-
-
-def test_build_prompt_without_continuation_omits_continuation_instruction() -> None:
-    prompt = build_prompt("Hello.", target_syllables=3)
-    assert "EM MEIO a uma frase" not in prompt
-
-
-def test_build_prompt_with_continuation_warns_not_to_drop_content() -> None:
-    prompt = build_prompt(
-        "for that. What are you talking about?", target_syllables=10, is_continuation=True
-    )
-    assert "EM MEIO a uma frase" in prompt
-    assert "não corte" in prompt.lower() or "nao corte" in prompt.lower()
 
 
 def test_extract_proper_nouns_catches_non_sentence_initial_capitalized_word() -> None:
@@ -271,50 +214,122 @@ def test_rank_candidates_prefers_preserved_emphasis_when_budget_ties() -> None:
     assert ranked[0].text == "Corre!"
 
 
-def test_score_candidate_continuation_does_not_penalize_going_over_budget() -> None:
-    # T0.23+ achado real: pra fragmento de frase cortada, um candidato mais
-    # longo que o orçamento (preservando conteúdo) não deve perder pontos
-    # de orçamento — o sistema comprime áudio depois, mas não recupera
-    # conteúdo que a tradução já cortou.
-    over_budget = score_candidate(
-        "Uma frase bem mais longa do que os quatro silabas pedidas mas completa",
-        target_syllables=4,
-        source_text="",
-        is_continuation=True,
+def _lines(n: int) -> list[WindowLine]:
+    return [WindowLine(f"seg{i:04d}", "A" if i % 2 else "B", f"line {i}") for i in range(n)]
+
+
+def test_build_windows_covers_every_line_once_in_order() -> None:
+    windows = build_windows(_lines(30), size=12, context_lines=3)
+    flat = [line.id for _, window in windows for line in window]
+    assert flat == [line.id for line in _lines(30)]
+    assert [len(w) for _, w in windows] == [12, 12, 6]
+
+
+def test_build_windows_gives_previous_lines_as_context() -> None:
+    windows = build_windows(_lines(30), size=12, context_lines=3)
+    assert windows[0][0] == []
+    assert [line.id for line in windows[1][0]] == ["seg0009", "seg0010", "seg0011"]
+
+
+def test_window_prompt_contains_lines_speakers_and_keep_content_rules() -> None:
+    prompt = build_window_prompt(
+        [WindowLine("seg0003", "B", "Here you"), WindowLine("seg0004", "A", "go. Hello!")],
+        PT_BR,
+        context_before=[WindowLine("seg0002", "A", "Call your dad.")],
+        preserve_terms=["NFL"],
     )
-    assert over_budget.budget_score == 1.0
+    assert '"id": "seg0003"' in prompt and '"speaker": "B"' in prompt
+    assert "Call your dad." in prompt and "do NOT translate these" in prompt
+    assert "NFL" in prompt
+    assert "profanity" in prompt and "change the content" in prompt
+    assert "Brazilian Portuguese" in prompt and '"vcs"' in prompt
 
 
-def test_score_candidate_continuation_still_penalizes_going_under_budget() -> None:
-    # Só o lado "mais longo" é perdoado — ficar mais CURTO que o orçamento
-    # ainda é penalizado (pode ser sinal de conteúdo cortado de outro jeito).
-    under_budget = score_candidate("Oi", target_syllables=12, source_text="", is_continuation=True)
-    assert under_budget.budget_score < 1.0
+def test_window_prompt_omits_optional_blocks() -> None:
+    prompt = build_window_prompt([WindowLine("seg0000", "A", "Hi.")], PT_BR)
+    assert "do NOT translate these" not in prompt
+    assert "keep exactly as written" not in prompt
 
 
-def test_score_candidate_non_continuation_keeps_symmetric_penalty() -> None:
-    # Sem is_continuation (default), comportamento idêntico ao antigo —
-    # ficar mais longo que o orçamento ainda é penalizado normalmente.
-    over_budget = score_candidate(
-        "Uma frase bem mais longa do que os quatro silabas pedidas",
-        target_syllables=4,
-        source_text="",
+def test_parse_window_response_maps_ids_to_text() -> None:
+    response = json.dumps(
+        {"translations": [{"id": "seg0001", "text": "Toma."}, {"id": "seg0002", "text": "Vai!"}]},
+        ensure_ascii=False,
     )
-    assert over_budget.budget_score < 1.0
+    assert parse_window_response(response, ["seg0001", "seg0002"], PT_BR) == {
+        "seg0001": "Toma.",
+        "seg0002": "Vai!",
+    }
 
 
-def test_rank_candidates_continuation_prefers_complete_over_short() -> None:
-    # Cenário real (seg0010, vídeo padrão): candidato curto que bate o
-    # orçamento mas perdeu conteúdo ("for that") perdia pro completo antes
-    # da mudança de pontuação pra fragmentos. "Que isso" (3 sílabas, fica
-    # abaixo do orçamento) simula o candidato que cortou "for that"; "Pra
-    # isso, que isso" (6 sílabas, no orçamento) simula o que preservou.
-    short_incomplete = "Que isso"
-    long_complete = "Pra isso, que isso"
-    ranked = rank_candidates(
-        [short_incomplete, long_complete],
-        target_syllables=6,
-        source_text="",
-        is_continuation=True,
+def test_parse_window_response_tolerates_prose_around_json() -> None:
+    response = 'Sure: {"translations": [{"id": "seg0001", "text": "Oi."}]} done.'
+    assert parse_window_response(response, ["seg0001"], PT_BR) == {"seg0001": "Oi."}
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [{"id": "seg0001", "text": "Oi."}],  # faltando seg0002
+        [
+            {"id": "seg0001", "text": "Oi."},
+            {"id": "seg0002", "text": "A"},
+            {"id": "x", "text": "B"},
+        ],
+        [{"id": "seg0001", "text": "Oi."}, {"id": "seg0001", "text": "De novo."}],
+        [{"id": "seg0001", "text": "Oi."}, {"id": "seg0002", "text": "  "}],
+        [{"id": "seg0001", "text": "Oi."}, {"id": "seg0002", "text": "mas显而易见"}],
+    ],
+)
+def test_parse_window_response_rejects_misaligned_or_bad_output(items) -> None:
+    response = json.dumps({"translations": items}, ensure_ascii=False)
+    with pytest.raises(ValueError):
+        parse_window_response(response, ["seg0001", "seg0002"], PT_BR)
+
+
+def test_language_rules_come_from_the_profile_not_the_shared_prompt() -> None:
+    # Portabilidade: um idioma novo é só um perfil novo; nada de pt-BR no
+    # prompt compartilhado.
+    other = TargetLanguage(
+        code="xx",
+        name="Testlandish",
+        scripts=("LATIN",),
+        extra_letters=frozenset(),
+        style_rules=("Use the polite form.",),
     )
-    assert ranked[0].text == long_complete
+    prompt = build_window_prompt([WindowLine("seg0000", "A", "Hi.")], other)
+    assert "Testlandish" in prompt and "Use the polite form." in prompt
+    assert "Portuguese" not in prompt and '"vcs"' not in prompt and "tá" not in prompt
+
+
+def test_script_check_follows_the_target_language() -> None:
+    cyrillic_target = TargetLanguage(
+        code="ru", name="Russian", scripts=("CYRILLIC",), extra_letters=frozenset(), style_rules=()
+    )
+    assert has_disallowed_script("Привет", PT_BR)
+    assert not has_disallowed_script("Привет", cyrillic_target)
+    assert has_disallowed_script("Hello", cyrillic_target)
+
+
+def test_split_window_halves_and_carries_context() -> None:
+    lines = _lines(12)
+    context = [WindowLine("ctx", "A", "before")]
+    (c1, first), (c2, second) = split_window(context, lines, context_lines=3)
+    assert c1 == context
+    assert [line.id for line in first] == [f"seg{i:04d}" for i in range(6)]
+    assert [line.id for line in second] == [f"seg{i:04d}" for i in range(6, 12)]
+    assert [line.id for line in c2] == ["seg0003", "seg0004", "seg0005"]
+
+
+def test_split_window_down_to_single_lines_covers_everything() -> None:
+    # Repetindo a divisão, toda janela chega a falas sozinhas sem perder nenhuma.
+    pending = [([], _lines(12))]
+    singles: list[str] = []
+    while pending:
+        context, lines = pending.pop()
+        if len(lines) == 1:
+            singles.append(lines[0].id)
+        else:
+            pending.extend(split_window(context, lines))
+    assert sorted(singles) == [line.id for line in _lines(12)]
+

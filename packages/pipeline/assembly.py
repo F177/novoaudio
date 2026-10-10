@@ -16,16 +16,22 @@ sem precisar de subprocess.
 from __future__ import annotations
 
 import subprocess
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pyloudnorm as pyln
+from scipy.ndimage import minimum_filter1d, uniform_filter1d
 
 from packages.pipeline.synthesis import MAX_TIME_STRETCH_RATIO, MIN_SYNTHESIS_SECONDS
 
 TARGET_LUFS = -14.0
 CLIPPING_THRESHOLD = 0.99
+# -1 dBFS: margem pra escrita em PCM 16-bit e pro AAC do remux, que podem
+# subir picos entre amostras acima do valor de amostra.
+PEAK_CEILING = 10 ** (-1.0 / 20)
+LIMITER_WINDOW_MS = 10.0
 
 # T0.16: acima disso, um descarte é sintoma de bug upstream (segmento mal
 # timestampado, vídeo mais curto que o esperado), não arredondamento.
@@ -235,15 +241,51 @@ def has_clipping(audio: np.ndarray, threshold: float = CLIPPING_THRESHOLD) -> bo
     return bool(np.any(np.abs(audio) > threshold))
 
 
+def limit_peaks(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    ceiling: float = PEAK_CEILING,
+    window_ms: float = LIMITER_WINDOW_MS,
+) -> np.ndarray:
+    """Limitador de pico com look-ahead: nenhuma amostra passa de `ceiling`.
+
+    Ganho necessário por amostra (`ceiling/|x|`) passa por um filtro de
+    mínimo de raio `window_ms` e depois por uma média móvel de raio menor
+    que esse — toda amostra dentro da janela da média já está coberta pelo
+    mínimo, então o ganho suavizado nunca fica acima do necessário em
+    nenhum ponto, e a redução começa antes do pico em vez de cortá-lo.
+    """
+    if audio.size == 0 or float(np.max(np.abs(audio))) <= ceiling:
+        return audio
+    required = np.minimum(1.0, ceiling / np.maximum(np.abs(audio), 1e-12))
+    radius = max(1, int(round(window_ms / 1000 * sample_rate)))
+    gain = minimum_filter1d(required, size=2 * radius + 1, mode="nearest")
+    gain = uniform_filter1d(gain, size=radius | 1, mode="nearest")
+    return np.clip(audio * gain, -ceiling, ceiling).astype(audio.dtype)
+
+
 def normalize_loudness(
     audio: np.ndarray, sample_rate: int, target_lufs: float = TARGET_LUFS
 ) -> np.ndarray:
-    """Normaliza loudness integrado pro alvo EBU R128 (−14 LUFS por padrão)."""
+    """Normaliza loudness integrado pro alvo EBU R128 (−14 LUFS por padrão)
+    e limita os picos em `PEAK_CEILING`.
+
+    Achado real (vídeo padrão, 2026-10-09): subir pro alvo de loudness
+    empurrava picos acima de 1,0, e a escrita em PCM 16-bit cortava 513
+    amostras no teto (distorção audível, `pyloudnorm` avisava "Possible
+    clipped samples" em toda rodada). O limitador custa uma fração de dB
+    no loudness integrado em troca de nenhum corte duro.
+    """
     meter = pyln.Meter(sample_rate)
     current_loudness = meter.integrated_loudness(audio)
     if current_loudness == float("-inf"):
         return audio  # áudio totalmente silencioso, não há o que normalizar
-    return pyln.normalize.loudness(audio, current_loudness, target_lufs)
+    with warnings.catch_warnings():
+        # o aviso de clipping do pyloudnorm é tratado logo abaixo
+        warnings.filterwarnings("ignore", message="Possible clipped samples")
+        normalized = pyln.normalize.loudness(audio, current_loudness, target_lufs)
+    return limit_peaks(normalized, sample_rate)
 
 
 def remux_with_video(

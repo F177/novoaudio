@@ -7,10 +7,12 @@ import pytest
 from packages.pipeline.assembly import (
     CLIPPING_THRESHOLD,
     MAX_DISCARDED_SECONDS,
+    PEAK_CEILING,
     TARGET_LUFS,
     TimedAudio,
     TimelineOverflowError,
     has_clipping,
+    limit_peaks,
     mix_with_background,
     normalize_loudness,
     place_segments_on_timeline,
@@ -290,6 +292,42 @@ def test_normalize_loudness_silent_audio_is_unchanged() -> None:
     audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
     normalized = normalize_loudness(audio, SAMPLE_RATE)
     assert np.allclose(normalized, 0.0)
+
+
+def _quiet_tone_with_spikes() -> np.ndarray:
+    # Fala real tem fator de crista alto: subir o loudness integrado pro
+    # alvo empurra os picos isolados bem acima de 1,0.
+    audio = _tone(3.0, amplitude=0.05)
+    audio[SAMPLE_RATE : SAMPLE_RATE + 40] = 0.9
+    audio[2 * SAMPLE_RATE : 2 * SAMPLE_RATE + 40] = -0.9
+    return audio
+
+
+def test_normalize_loudness_never_exceeds_peak_ceiling() -> None:
+    normalized = normalize_loudness(_quiet_tone_with_spikes(), SAMPLE_RATE)
+    assert np.max(np.abs(normalized)) <= PEAK_CEILING + 1e-6
+
+
+def test_limit_peaks_noop_below_ceiling() -> None:
+    audio = _tone(1.0, amplitude=0.5)
+    assert np.array_equal(limit_peaks(audio, SAMPLE_RATE), audio)
+
+
+def test_limit_peaks_preserves_length_and_bounds_peaks() -> None:
+    audio = _tone(1.0, amplitude=1.5)
+    limited = limit_peaks(audio, SAMPLE_RATE)
+    assert len(limited) == len(audio)
+    assert np.max(np.abs(limited)) <= PEAK_CEILING + 1e-6
+
+
+def test_limit_peaks_leaves_audio_far_from_peak_untouched() -> None:
+    # Redução de ganho é local (janela de look-ahead), não abaixa o
+    # arquivo inteiro por causa de um pico só.
+    audio = _tone(2.0, amplitude=0.3)
+    audio[SAMPLE_RATE : SAMPLE_RATE + 10] = 1.8
+    limited = limit_peaks(audio, SAMPLE_RATE)
+    far = slice(0, SAMPLE_RATE // 2)
+    assert np.allclose(limited[far], audio[far])
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg não disponível")

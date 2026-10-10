@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy",
     "pyloudnorm",
+    "scipy",
     "soundfile",
     "librosa",
     "boto3",

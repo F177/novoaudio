@@ -79,8 +79,10 @@ PT_BR = TargetLanguage(
     scripts=("LATIN",),
     extra_letters=frozenset("ªº"),
     style_rules=(
-        'Spoken register: use contractions such as "tá", "pra", "cê", "tô", "né" when they '
-        "sound natural.",
+        "Everyday spoken Brazilian Portuguese, as people talk in YouTube videos — never "
+        'formal or written style. Use "tá", "pra", "tô", "né" and "cê" where a Brazilian '
+        'would say them, and drop subject pronouns that speech drops ("Não sei", not '
+        '"Eu não sei").',
         'Never use chat abbreviations ("vc", "vcs", "q", "pq", "tb", "tbm", "blz"); write the '
         "words in full.",
         '"you" addressing one person is "você" or "cê"; addressing several people is "vocês".',
@@ -332,6 +334,12 @@ telegraphic, never abbreviations. Do not add anything.
 {language_rules}
 Examples of good shortening:
 {examples}
+The lines around it, for context only (do not change them):
+- before: "{previous_line}"
+- after: "{next_line}"
+If this line starts or ends in the middle of a sentence that continues in the line before or \
+after, keep the words at that edge, so the sentence still connects when read in order.
+
 English original: "{source}"
 Current {language} line: "{current_text}"
 
@@ -345,9 +353,18 @@ def build_shorten_prompt(
     target_syllables: int,
     language: TargetLanguage,
     *,
+    previous_line: str | None = None,
+    next_line: str | None = None,
     n: int = SHORTEN_CANDIDATES,
 ) -> str:
+    """Achado real: encurtando a fala isolada, o modelo cortava a ponta de
+    uma frase que continuava na fala seguinte ("…em vez de deixá-la
+    crescer?" + "trabalho?" perdeu "conseguir um"). Em 16 de 35 falas dos
+    Shorts testados a frase atravessa o corte, então as vizinhas vão junto.
+    """
     return SHORTEN_PROMPT_TEMPLATE.format(
+        previous_line=previous_line or "(none)",
+        next_line=next_line or "(none)",
         language=language.name,
         target=target_syllables,
         current=language.count_syllables(current_text),

@@ -243,14 +243,20 @@ def cmd_translate(args: argparse.Namespace) -> None:
             )
         )
 
-    def generate_batch(prompts: list[str]) -> list[str]:
+    # Primeira tentativa de cada janela é determinística (a escolha mais
+    # provável): mais precisa pra tradução e reproduzível — com amostragem, o
+    # mesmo Short saía diferente a cada rodada, às vezes errado. Retentativa
+    # e encurtamento amostram (precisam de alternativas diferentes).
+    def generate_batch(prompts: list[str], *, sample: bool = True) -> list[str]:
         inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        sampling = {"do_sample": True, "temperature": 0.7} if sample else {
+            "do_sample": False, "temperature": None, "top_p": None, "top_k": None
+        }
         outputs = model.generate(
             **inputs,
             max_new_tokens=2048,
-            do_sample=True,
-            temperature=0.7,
             suppress_tokens=suppressed_token_ids,
+            **sampling,
         )
         prompt_len = inputs["input_ids"].shape[1]
         return [
@@ -265,10 +271,16 @@ def cmd_translate(args: argparse.Namespace) -> None:
     ]
     while pending:
         retry = []
-        for chunk_start in range(0, len(pending), BATCH_SIZE):
-            chunk = pending[chunk_start : chunk_start + BATCH_SIZE]
+        # greedy e amostrados em lotes separados (cada `generate` tem um modo só)
+        groups = [[p for p in pending if p[2] == 0], [p for p in pending if p[2] > 0]]
+        batches = [
+            (group[i : i + BATCH_SIZE], sample)
+            for group, sample in zip(groups, (False, True), strict=True)
+            for i in range(0, len(group), BATCH_SIZE)
+        ]
+        for chunk, sample in batches:
             responses = generate_batch(
-                [window_prompt((context, lines)) for context, lines, _ in chunk]
+                [window_prompt((context, lines)) for context, lines, _ in chunk], sample=sample
             )
             for (context, lines, failures), response in zip(chunk, responses, strict=True):
                 try:
@@ -307,6 +319,11 @@ def cmd_translate(args: argparse.Namespace) -> None:
     def over_budget(seg_id: str) -> bool:
         return count(current[seg_id]) > target_syllables[seg_id] * (1 + TOLERANCE_OFF_SCREEN)
 
+    order = [line["id"] for job in jobs for line in job["lines"]]
+    neighbors = {
+        seg_id: (order[i - 1] if i > 0 else None, order[i + 1] if i + 1 < len(order) else None)
+        for i, seg_id in enumerate(order)
+    }
     queue = [seg_id for seg_id in current if over_budget(seg_id)]
     for round_number in range(1, SHORTEN_ROUNDS + 1):
         if not queue:
@@ -318,7 +335,12 @@ def cmd_translate(args: argparse.Namespace) -> None:
             prompts = [
                 chat(
                     build_shorten_prompt(
-                        source_text[s], current[s], target_syllables[s], language
+                        source_text[s],
+                        current[s],
+                        target_syllables[s],
+                        language,
+                        previous_line=current.get(neighbors[s][0] or ""),
+                        next_line=current.get(neighbors[s][1] or ""),
                     )
                 )
                 for s in chunk

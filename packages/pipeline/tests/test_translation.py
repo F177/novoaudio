@@ -425,3 +425,21 @@ def test_profanity_count_catches_inflections() -> None:
     assert profanity_count("Sua merda de gastos, porra, que fodido.", PT_BR) == 3
     assert profanity_count("Seus gastos sozinhos no mês passado.", PT_BR) == 0
 
+
+def test_shorten_prompt_shows_neighbors_and_keeps_sentence_edges() -> None:
+    prompt = build_shorten_prompt(
+        "instead of her growing up and getting a",
+        "em vez de deixá-la crescer e conseguir um",
+        8,
+        PT_BR,
+        previous_line="Por que estamos dando milhares pra ela",
+        next_line="trabalho?",
+    )
+    assert '"trabalho?"' in prompt and "Por que estamos dando" in prompt
+    assert "keep the words at that edge" in prompt
+
+
+def test_shorten_prompt_without_neighbors_says_none() -> None:
+    prompt = build_shorten_prompt("Hi.", "Oi, tudo bem com você?", 3, PT_BR)
+    assert '- before: "(none)"' in prompt and '- after: "(none)"' in prompt
+

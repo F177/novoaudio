@@ -791,7 +791,12 @@ def run_pipeline(
         for seg_id, meta in synth_meta.items()
         for i, cand in enumerate(meta["candidates"])
     ]
-    eval_hash = _hash_json(eval_jobs)
+    # Achado real (2026-10-10): só os caminhos entravam no hash, e o áudio
+    # ressintetizado tem o mesmo nome — o eval.json velho (de outro texto)
+    # era reaproveitado e a escolha entre candidatos usava a transcrição
+    # errada, deixando passar o candidato que engolia palavra. A chave da
+    # síntese cobre o texto e o código que geraram o áudio.
+    eval_hash = _hash_json([eval_jobs, _stage_key("synthesize", synth_hash)])
     eval_path = cached("eval.json")
     if needs_stage(eval_path, "evaluate", eval_hash):
         (cache_dir / "eval_jobs.json").write_text(

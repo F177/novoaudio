@@ -3,7 +3,11 @@ import subprocess
 
 from scripts.dub import (
     _get_git_state,
+    _hash_file,
+    _hash_json,
     _is_bad_synthesis,
+    _record_stage_hash,
+    _stage_needs_rerun,
     build_stage_report,
     pick_best_synthesis,
     save_transcript_and_translation,
@@ -355,3 +359,148 @@ def test_update_dashboard_history_entry_includes_git_sha_and_dirty(tmp_path) -> 
     assert len(history) == 2
     assert history[0]["git_dirty"] is False
     assert history[1]["git_dirty"] is True
+
+
+def test_hash_json_is_deterministic_regardless_of_key_order() -> None:
+    assert _hash_json({"a": 1, "b": 2}) == _hash_json({"b": 2, "a": 1})
+
+
+def test_hash_json_differs_for_different_content() -> None:
+    assert _hash_json({"a": 1}) != _hash_json({"a": 2})
+
+
+def test_hash_file_differs_for_different_content(tmp_path) -> None:
+    f1 = tmp_path / "a.bin"
+    f2 = tmp_path / "b.bin"
+    f1.write_bytes(b"conteudo 1")
+    f2.write_bytes(b"conteudo 2 diferente")
+    assert _hash_file(f1) != _hash_file(f2)
+
+
+def test_hash_file_same_content_same_hash(tmp_path) -> None:
+    f1 = tmp_path / "a.bin"
+    f2 = tmp_path / "b.bin"
+    f1.write_bytes(b"mesmo conteudo")
+    f2.write_bytes(b"mesmo conteudo")
+    assert _hash_file(f1) == _hash_file(f2)
+
+
+def test_stage_needs_rerun_true_when_output_missing(tmp_path) -> None:
+    missing = tmp_path / "out.json"
+    assert _stage_needs_rerun(
+        tmp_path, "translate", "abc", missing, force=False, force_stage=None
+    )
+
+
+def test_stage_needs_rerun_true_when_no_hash_recorded_even_if_output_exists(tmp_path) -> None:
+    # Cache de antes da T0.25 (ou primeira rodada): arquivo de saída existe,
+    # mas não há prova de que veio da mesma entrada — trata como obsoleto.
+    output = tmp_path / "out.json"
+    output.write_text("{}", encoding="utf-8")
+    assert _stage_needs_rerun(
+        tmp_path, "translate", "abc", output, force=False, force_stage=None
+    )
+
+
+def test_stage_needs_rerun_false_when_hash_matches(tmp_path) -> None:
+    output = tmp_path / "out.json"
+    output.write_text("{}", encoding="utf-8")
+    _record_stage_hash(tmp_path, "translate", "abc")
+    assert not _stage_needs_rerun(
+        tmp_path, "translate", "abc", output, force=False, force_stage=None
+    )
+
+
+def test_stage_needs_rerun_true_when_hash_differs(tmp_path) -> None:
+    output = tmp_path / "out.json"
+    output.write_text("{}", encoding="utf-8")
+    _record_stage_hash(tmp_path, "translate", "abc")
+    assert _stage_needs_rerun(
+        tmp_path, "translate", "xyz", output, force=False, force_stage=None
+    )
+
+
+def test_stage_needs_rerun_true_when_forced_globally(tmp_path) -> None:
+    output = tmp_path / "out.json"
+    output.write_text("{}", encoding="utf-8")
+    _record_stage_hash(tmp_path, "translate", "abc")
+    assert _stage_needs_rerun(
+        tmp_path, "translate", "abc", output, force=True, force_stage=None
+    )
+
+
+def test_stage_needs_rerun_force_stage_only_affects_named_stage(tmp_path) -> None:
+    # --force-stage synthesize: só a etapa nomeada é forçada, as outras
+    # continuam respeitando o hash normalmente.
+    synth_output = tmp_path / "synth.json"
+    synth_output.write_text("{}", encoding="utf-8")
+    _record_stage_hash(tmp_path, "synthesize", "abc")
+    assert _stage_needs_rerun(
+        tmp_path, "synthesize", "abc", synth_output, force=False, force_stage="synthesize"
+    )
+
+    translate_output = tmp_path / "translate.json"
+    translate_output.write_text("{}", encoding="utf-8")
+    _record_stage_hash(tmp_path, "translate", "def")
+    assert not _stage_needs_rerun(
+        tmp_path, "translate", "def", translate_output, force=False, force_stage="synthesize"
+    )
+
+
+def test_changing_segmentation_invalidates_translate_and_synth_but_not_upstream_stages(
+    tmp_path,
+) -> None:
+    # T0.25, cenário de aceite literal: trocar a segmentação invalida
+    # tradução e síntese (o conteúdo que essas etapas recebem muda), mas
+    # NÃO separação de stems nem ASR (a entrada delas é o áudio/vocals, que
+    # não mudou — só a segmentação local mudou).
+    audio_path = tmp_path / "audio.wav"
+    audio_path.write_bytes(b"audio fake, nao mudou entre as duas rodadas")
+    vocals_path = tmp_path / "vocals.wav"
+    vocals_path.write_bytes(b"vocals fake, tambem nao mudou")
+
+    separate_stems_output = tmp_path / "background.wav"
+    separate_stems_output.write_bytes(b"fake")
+    transcribe_output = tmp_path / "transcript.json"
+    transcribe_output.write_text("{}", encoding="utf-8")
+    translate_output = tmp_path / "translations.json"
+    translate_output.write_text("{}", encoding="utf-8")
+    synth_output = tmp_path / "synth_meta.json"
+    synth_output.write_text("{}", encoding="utf-8")
+
+    # Rodada 1: segmentação original, grava os hashes de todas as etapas.
+    audio_hash = _hash_file(audio_path)
+    vocals_hash = _hash_file(vocals_path)
+    translate_jobs_v1 = [{"id": "seg0000", "source_text": "Hello there, how are you doing"}]
+    translate_hash_v1 = _hash_json(translate_jobs_v1)
+    synth_jobs_v1 = [{"id": "seg0000", "translated_text": "Oi, como vai"}]
+    synth_hash_v1 = _hash_json(synth_jobs_v1)
+
+    _record_stage_hash(tmp_path, "separate_stems", audio_hash)
+    _record_stage_hash(tmp_path, "transcribe", vocals_hash)
+    _record_stage_hash(tmp_path, "translate", translate_hash_v1)
+    _record_stage_hash(tmp_path, "synthesize", synth_hash_v1)
+
+    # Rodada 2: segmentação MUDOU (ex.: algoritmo de segment_words ajustado),
+    # mesmo áudio/vocals. seg0000 agora cobre um trecho de texto diferente.
+    translate_jobs_v2 = [{"id": "seg0000", "source_text": "Hello there, how are"}]
+    translate_hash_v2 = _hash_json(translate_jobs_v2)
+    synth_jobs_v2 = [{"id": "seg0000", "translated_text": "Oi, como"}]
+    synth_hash_v2 = _hash_json(synth_jobs_v2)
+
+    assert not _stage_needs_rerun(
+        tmp_path, "separate_stems", audio_hash, separate_stems_output,
+        force=False, force_stage=None,
+    )
+    assert not _stage_needs_rerun(
+        tmp_path, "transcribe", vocals_hash, transcribe_output,
+        force=False, force_stage=None,
+    )
+    assert _stage_needs_rerun(
+        tmp_path, "translate", translate_hash_v2, translate_output,
+        force=False, force_stage=None,
+    )
+    assert _stage_needs_rerun(
+        tmp_path, "synthesize", synth_hash_v2, synth_output,
+        force=False, force_stage=None,
+    )

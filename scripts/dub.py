@@ -43,6 +43,7 @@ Uso (rodar como módulo, `-m`, não `python scripts/dub.py` — senão
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -212,6 +213,61 @@ def pick_best_synthesis(
 
 def _sanitize_for_dirname(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+
+
+# T0.25: `needs()` (existência de arquivo) reaproveitava `translations.json`/
+# `synth/` por POSIÇÃO (`seg0007`) mesmo que a segmentação tivesse mudado com
+# o mesmo `--cache-dir` — a tradução antiga do seg0007 era aplicada ao novo
+# seg0007, sem erro nenhum. Cada etapa com esse risco agora é chaveada pelo
+# hash das suas entradas reais: se o conteúdo que a etapa recebe muda, o
+# hash muda, e a etapa reroda mesmo que o arquivo de saída antigo ainda
+# exista. Hash gravado num sidecar `<stage>.hash` dentro do cache_dir.
+def _hash_json(obj: Any) -> str:
+    canonical = json.dumps(obj, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _hash_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _stage_hash_path(cache_dir: Path, stage: str) -> Path:
+    return cache_dir / f"{stage}.hash"
+
+
+def _record_stage_hash(cache_dir: Path, stage: str, current_hash: str) -> None:
+    _stage_hash_path(cache_dir, stage).write_text(current_hash, encoding="utf-8")
+
+
+def _stage_hash_matches(cache_dir: Path, stage: str, current_hash: str) -> bool:
+    hash_path = _stage_hash_path(cache_dir, stage)
+    # Sem hash registrado (cache de antes da T0.25, ou primeira execução
+    # deste cache_dir) — sem prova de que a entrada é a mesma, mais seguro
+    # tratar como obsoleto do que confiar cegamente num arquivo de saída que
+    # pode ter vindo de uma entrada diferente.
+    if not hash_path.exists():
+        return False
+    return hash_path.read_text(encoding="utf-8").strip() == current_hash
+
+
+def _stage_needs_rerun(
+    cache_dir: Path,
+    stage: str,
+    current_hash: str,
+    output_path: Path,
+    *,
+    force: bool,
+    force_stage: str | None,
+) -> bool:
+    if force or force_stage == stage:
+        return True
+    if not output_path.exists():
+        return True
+    return not _stage_hash_matches(cache_dir, stage, current_hash)
 
 
 def _has_video_stream(path: Path) -> bool:
@@ -433,6 +489,8 @@ def run_pipeline(
     pitch_transfer: bool = False,
     embed_subtitles: bool = False,
     emotion_match: bool = False,
+    allow_timeline_overflow: bool = False,
+    force_stage: str | None = None,
 ) -> dict[str, Any]:
     cache_dir.mkdir(parents=True, exist_ok=True)
     pod = PodConfig.from_env()
@@ -450,6 +508,14 @@ def run_pipeline(
     def needs(path: Path) -> bool:
         return force or not path.exists()
 
+    def needs_stage(output_path: Path, stage: str, current_hash: str) -> bool:
+        return _stage_needs_rerun(
+            cache_dir, stage, current_hash, output_path, force=force, force_stage=force_stage
+        )
+
+    def record_stage(stage: str, current_hash: str) -> None:
+        _record_stage_hash(cache_dir, stage, current_hash)
+
     # --- 1. extrai áudio original (local, ffmpeg, sem GPU) ---
     audio_path = cached("audio.wav")
     if needs(audio_path):
@@ -463,7 +529,8 @@ def run_pipeline(
     # sem round-trip de rede por segmento — baixa uma vez aqui, junto do
     # fundo, que já era baixado.
     vocals_path = cached("vocals.wav")
-    if needs(background_path):
+    separate_stems_hash = _hash_file(audio_path)
+    if needs_stage(background_path, "separate_stems", separate_stems_hash):
         with _timed_stage("separate_stems"):
             upload_to_pod(pod, str(audio_path), f"{remote_job_dir}/audio.wav")
             run_on_pod(
@@ -475,6 +542,7 @@ def run_pipeline(
                 pod, f"{remote_job_dir}/stems/background.wav", str(background_path)
             )
             download_from_pod(pod, vocals_remote, str(vocals_path))
+        record_stage("separate_stems", separate_stems_hash)
 
     background_resampled_path = cached("background_24k.wav")
     if needs(background_resampled_path):
@@ -482,7 +550,8 @@ def run_pipeline(
 
     # --- 3. transcrição + diarização (remoto, WhisperX) ---
     transcript_path = cached("transcript.json")
-    if needs(transcript_path):
+    transcribe_hash = _hash_file(vocals_path)
+    if needs_stage(transcript_path, "transcribe", transcribe_hash):
         with _timed_stage("transcribe"):
             run_on_pod(
                 pod,
@@ -491,6 +560,7 @@ def run_pipeline(
                 env=hf_env,
             )
             download_from_pod(pod, f"{remote_job_dir}/transcript.json", str(transcript_path))
+        record_stage("transcribe", transcribe_hash)
 
     transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
 
@@ -536,30 +606,36 @@ def run_pipeline(
     calibration = load_calibration()
 
     # --- 5. tradução com restrição de sílabas (remoto, Qwen2.5) ---
+    # T0.25: `translate_jobs` é montado SEMPRE (não só quando a etapa vai
+    # rodar) — precisamos do conteúdo pra calcular o hash de entrada e
+    # decidir se a etapa está obsoleta, mesmo quando `translations.json`
+    # antigo ainda existe no disco.
+    #
+    # T0.23: termos extraídos uma vez do vídeo inteiro (não por segmento) —
+    # nome próprio citado em vários trechos (ex. "Hurts" o quarterback) só é
+    # reconhecível como recorrente olhando o vídeo todo, não a frase isolada
+    # que cada job vê.
+    preserve_terms = extract_proper_nouns([s.texto for s in segments])
+    translate_jobs = []
+    for i, s in enumerate(segments):
+        pause_seconds = sum(p.duration for p in s.pausas_internas)
+        target_seconds = s.t_fim - s.t_inicio
+        target_syllables = syllables_that_fit(
+            target_seconds, calibration, pause_seconds=pause_seconds
+        )
+        translate_jobs.append(
+            {
+                "id": f"seg{i:04d}",
+                "source_text": s.texto,
+                "target_syllables": max(1, target_syllables),
+                "previous_text": segments[i - 1].texto if i > 0 else None,
+                "next_text": segments[i + 1].texto if i < len(segments) - 1 else None,
+                "preserve_terms": preserve_terms,
+            }
+        )
+    translate_hash = _hash_json(translate_jobs)
     translations_path = cached("translations.json")
-    if needs(translations_path):
-        # T0.23: termos extraídos uma vez do vídeo inteiro (não por segmento)
-        # — nome próprio citado em vários trechos (ex. "Hurts" o quarterback)
-        # só é reconhecível como recorrente olhando o vídeo todo, não a frase
-        # isolada que cada job vê.
-        preserve_terms = extract_proper_nouns([s.texto for s in segments])
-        translate_jobs = []
-        for i, s in enumerate(segments):
-            pause_seconds = sum(p.duration for p in s.pausas_internas)
-            target_seconds = s.t_fim - s.t_inicio
-            target_syllables = syllables_that_fit(
-                target_seconds, calibration, pause_seconds=pause_seconds
-            )
-            translate_jobs.append(
-                {
-                    "id": f"seg{i:04d}",
-                    "source_text": s.texto,
-                    "target_syllables": max(1, target_syllables),
-                    "previous_text": segments[i - 1].texto if i > 0 else None,
-                    "next_text": segments[i + 1].texto if i < len(segments) - 1 else None,
-                    "preserve_terms": preserve_terms,
-                }
-            )
+    if needs_stage(translations_path, "translate", translate_hash):
         (cache_dir / "translate_jobs.json").write_text(
             json.dumps(translate_jobs, ensure_ascii=False), encoding="utf-8"
         )
@@ -579,6 +655,7 @@ def run_pipeline(
             download_from_pod(
                 pod, f"{remote_job_dir}/translations.json", str(translations_path)
             )
+        record_stage("translate", translate_hash)
 
     translations = {
         t["id"]: t["candidates"]
@@ -615,10 +692,14 @@ def run_pipeline(
     # inteiras do T0.12/T0.14 (caro: processo novo no Pod + round-trip de
     # avaliação por rodada) por escolher o melhor entre N amostras já
     # geradas, localmente, sem round-trip extra de rede/GPU.
+    # T0.25: montado SEMPRE, mesma razão de `translate_jobs` acima — precisa
+    # do conteúdo pra calcular o hash de entrada antes de decidir se a etapa
+    # está obsoleta.
+    synth_jobs = [build_synth_job(seg_id) for seg_id in segments_by_id]
+    synth_hash = _hash_json(synth_jobs)
     synth_dir = cached("synth")
     synth_meta_path = synth_dir / "synth_meta.json"
-    if needs(synth_meta_path):
-        synth_jobs = [build_synth_job(seg_id) for seg_id in segments_by_id]
+    if needs_stage(synth_meta_path, "synthesize", synth_hash):
         (cache_dir / "synth_jobs.json").write_text(
             json.dumps(synth_jobs, ensure_ascii=False), encoding="utf-8"
         )
@@ -634,17 +715,20 @@ def run_pipeline(
                 env=synth_env,
             )
             download_from_pod(pod, f"{remote_job_dir}/synth", str(synth_dir))
+        record_stage("synthesize", synth_hash)
 
     synth_meta = {m["id"]: m for m in json.loads(synth_meta_path.read_text(encoding="utf-8"))}
 
     # --- 7. avaliação CER round-trip (remoto, Whisper large-v3) — um job por candidato ---
+    # T0.25: montado SEMPRE, mesma razão de `translate_jobs`/`synth_jobs`.
+    eval_jobs = [
+        {"id": f"{seg_id}_cand{i}", "audio_path": f"{remote_job_dir}/synth/{cand['path']}"}
+        for seg_id, meta in synth_meta.items()
+        for i, cand in enumerate(meta["candidates"])
+    ]
+    eval_hash = _hash_json(eval_jobs)
     eval_path = cached("eval.json")
-    if needs(eval_path):
-        eval_jobs = [
-            {"id": f"{seg_id}_cand{i}", "audio_path": f"{remote_job_dir}/synth/{cand['path']}"}
-            for seg_id, meta in synth_meta.items()
-            for i, cand in enumerate(meta["candidates"])
-        ]
+    if needs_stage(eval_path, "evaluate", eval_hash):
         (cache_dir / "eval_jobs.json").write_text(
             json.dumps(eval_jobs, ensure_ascii=False), encoding="utf-8"
         )
@@ -659,6 +743,7 @@ def run_pipeline(
                 env={**hf_env, "LD_LIBRARY_PATH": pod.ld_library_path_asr},
             )
             download_from_pod(pod, f"{remote_job_dir}/eval.json", str(eval_path))
+        record_stage("evaluate", eval_hash)
 
     candidate_eval_texts = {
         e["id"]: e["text"] for e in json.loads(eval_path.read_text(encoding="utf-8"))
@@ -879,7 +964,31 @@ def run_pipeline(
     # determinístico). Fundo alto, sobreposição com vizinho e corte no fim
     # da timeline só aparecem depois da mixagem, que é onde recortamos agora.
     total_duration = _probe_duration_seconds(video_path)
-    placement = place_segments_on_timeline(timed_segments, total_duration, SYNTH_SAMPLE_RATE)
+    if allow_timeline_overflow:
+        # Diagnóstico/dev only — NUNCA o default do produto (ver docstring de
+        # `place_segments_on_timeline`: esses limiares são físicos, não
+        # calibrados num vídeo só). Uso real: inspecionar o resultado atual
+        # de um vídeo que já bate o gate (ex. piso de síntese ainda não
+        # investigado, T0.26) sem fingir que o corte não aconteceu — o
+        # relatório final ainda reporta `discarded_samples` de verdade.
+        print(
+            "[aviso] --allow-timeline-overflow ligado: gate de corte de áudio "
+            "desativado pra esta rodada. Resultado é pra inspeção, não representa "
+            "o comportamento padrão do produto."
+        )
+        placement = place_segments_on_timeline(
+            timed_segments,
+            total_duration,
+            SYNTH_SAMPLE_RATE,
+            # `int(round(... * sample_rate))` no gate não aceita infinito —
+            # a duração total do vídeo já é um teto impossível de ultrapassar
+            # na prática (não se descarta mais do que existe de timeline).
+            max_discarded_seconds=total_duration + 1.0,
+            max_single_segment_discard_seconds=total_duration + 1.0,
+            max_segments_with_discard=len(timed_segments),
+        )
+    else:
+        placement = place_segments_on_timeline(timed_segments, total_duration, SYNTH_SAMPLE_RATE)
     if vocals_only:
         # --vocals-only (T0.12, pedido pontual pra avaliar a voz sem o fundo
         # original atrapalhando) — comportamento padrão do produto continua
@@ -1097,6 +1206,15 @@ def main() -> None:
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
+        "--force-stage",
+        default=None,
+        choices=["separate_stems", "transcribe", "translate", "synthesize", "evaluate"],
+        help=(
+            "refaz só a etapa indicada, mesmo que o hash de entrada bata com o "
+            "cache existente (T0.25) — diferente de --force, que refaz tudo"
+        ),
+    )
+    parser.add_argument(
         "--vocals-only",
         action="store_true",
         help=(
@@ -1142,6 +1260,17 @@ def main() -> None:
             "dado real de produção"
         ),
     )
+    parser.add_argument(
+        "--allow-timeline-overflow",
+        action="store_true",
+        help=(
+            "desativa o gate de corte de áudio (TimelineOverflowError) só nesta "
+            "rodada — diagnóstico/dev, NUNCA o comportamento padrão do produto "
+            "(ver assembly.place_segments_on_timeline). Usa pra inspecionar o "
+            "resultado atual de um vídeo que já bate o limiar físico (ex. piso de "
+            "síntese, T0.26), sem fingir que o corte não aconteceu."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.video and not args.r2_key:
@@ -1171,6 +1300,8 @@ def main() -> None:
         pitch_transfer=args.pitch_transfer,
         embed_subtitles=args.subtitles,
         emotion_match=args.emotion_match,
+        allow_timeline_overflow=args.allow_timeline_overflow,
+        force_stage=args.force_stage,
     )
     transcript_path, translation_path = save_transcript_and_translation(
         report, cache_dir, Path(report["output"])

@@ -41,6 +41,7 @@ esticar o áudio de uma palavra isolada.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 DEFAULT_WEAK_PAUSE_MIN = 0.12
@@ -217,3 +218,44 @@ def _dominant_speaker(words: list[Word]) -> str | None:
     if not totals:
         return None
     return max(totals, key=lambda speaker: totals[speaker])
+
+
+# --- Pontuação restaurada --------------------------------------------------
+# Achado real (2026-10-10): o WhisperX às vezes devolve trechos longos sem
+# pontuação nenhuma, e o tradutor erra a estrutura ("but you're not you're
+# calm" virou "mas cê não tá calmo"). Pedir pontuação ao próprio Whisper
+# (initial_prompt) fez ele PULAR uma frase inteira num Short — descartado. Um
+# modelo de pontuação só acrescenta sinal às palavras já transcritas; nunca
+# tira nem troca palavra.
+
+# Sequência de palavras sem nenhum sinal a partir da qual o trecho é
+# repontuado. Ponto de partida não calibrado.
+PUNCTUATION_RUN_WORDS = 12
+
+_ENDS_WITH_PUNCTUATION = re.compile(r"[.,;:!?…\-—][\"')\]]*$")
+
+
+def needs_punctuation(words: list[str], run: int = PUNCTUATION_RUN_WORDS) -> bool:
+    streak = 0
+    for word in words:
+        streak = 0 if _ENDS_WITH_PUNCTUATION.search(word) else streak + 1
+        if streak >= run:
+            return True
+    return False
+
+
+def apply_punctuation(words: list[str], marks: list[str]) -> list[str]:
+    """`marks[i]` é o sinal previsto depois da palavra i ("." "," "?" ":" ou
+    nada). Só acrescenta onde a palavra ainda não tem sinal, e põe maiúscula
+    depois de fim de frase; o texto das palavras nunca muda."""
+    out: list[str] = []
+    sentence_start = False
+    for word, mark in zip(words, marks, strict=True):
+        if sentence_start and word[:1].islower():
+            word = word[:1].upper() + word[1:]
+        if mark in {".", ",", "?", ":"} and not _ENDS_WITH_PUNCTUATION.search(word):
+            word += mark
+        sentence_start = word.endswith((".", "?", "!"))
+        out.append(word)
+    return out
+

@@ -61,6 +61,7 @@ import numpy as np
 import soundfile as sf
 from dotenv import load_dotenv
 
+from packages.pipeline import segmentation
 from packages.pipeline.assembly import (
     TimedAudio,
     mix_with_background,
@@ -292,7 +293,13 @@ def _stage_code_objects() -> dict[str, list[Any]]:
 
     return {
         "separate_stems": [pod_worker.cmd_separate_stems],
-        "transcribe": [pod_worker.cmd_transcribe, pod_worker._patch_torch_compat_shims],
+        "transcribe": [
+            pod_worker.cmd_transcribe,
+            pod_worker._patch_torch_compat_shims,
+            pod_worker._restore_punctuation,
+            segmentation.needs_punctuation,
+            segmentation.apply_punctuation,
+        ],
         "translate": [pod_worker.cmd_translate, translation],
         "synthesize": [pod_worker.cmd_synthesize, synthesis, normalize],
         "evaluate": [pod_worker.cmd_evaluate],

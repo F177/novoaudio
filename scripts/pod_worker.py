@@ -132,9 +132,41 @@ def _patch_torch_compat_shims() -> None:
         torch.load = _torch_load_trusted_default
 
 
-TRANSCRIBE_PROMPT = (
-    "Hey, so, what do you think? I mean, it's crazy. No, I'm serious! Okay, let's go."
-)
+# Restauração de pontuação (MIT, XLM-R): só acrescenta sinal às palavras
+# já transcritas. Ver `segmentation.needs_punctuation`.
+PUNCTUATION_MODEL = "oliverguhr/fullstop-punctuation-multilang-large"
+
+
+def _restore_punctuation(segments: list[dict], device: str) -> None:
+    """Repontua, no lugar, só os segmentos do WhisperX com trecho longo sem
+    pontuação. O modelo só carrega se algum precisar."""
+    import torch
+    from transformers import AutoModelForTokenClassification, AutoTokenizer
+
+    from packages.pipeline.segmentation import apply_punctuation, needs_punctuation
+
+    model = tokenizer = None
+    for seg in segments:
+        words = [w for w in seg.get("words", []) if w.get("word")]
+        texts = [w["word"] for w in words]
+        if not needs_punctuation(texts):
+            continue
+        if model is None:
+            tokenizer = AutoTokenizer.from_pretrained(PUNCTUATION_MODEL)
+            model = AutoModelForTokenClassification.from_pretrained(PUNCTUATION_MODEL)
+            model = model.to(device).eval()
+        enc = tokenizer(texts, is_split_into_words=True, truncation=True, return_tensors="pt")
+        with torch.no_grad():
+            predicted = model(**enc.to(device)).logits.argmax(-1)[0].tolist()
+        # rótulo de cada palavra = o do primeiro sub-token dela
+        marks = ["0"] * len(texts)
+        for k, word_id in enumerate(enc.word_ids()):
+            if word_id is not None and (k == 0 or enc.word_ids()[k - 1] != word_id):
+                marks[word_id] = model.config.id2label[predicted[k]]
+        for word, text in zip(words, apply_punctuation(texts, marks), strict=True):
+            word["word"] = text
+        seg["text"] = " ".join(w["word"] for w in words)
+        print(f"[transcribe] pontuação restaurada: {seg['text'][:120]!r}")
 
 
 def cmd_transcribe(args: argparse.Namespace) -> None:
@@ -145,17 +177,7 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
     device = "cuda"
     language = "en"
 
-    # Achado real (2026-10-10): sem isso o Whisper devolvia trechos inteiros
-    # sem pontuação ("but you're not you're calm…"), e o tradutor invertia o
-    # sentido ("mas cê não tá calmo"). Um texto inicial pontuado faz ele
-    # pontuar; medido no Short "Power of Being Calm" e no do streamer.
-    asr_model = whisperx.load_model(
-        "large-v3",
-        device,
-        compute_type="float16",
-        language=language,
-        asr_options={"initial_prompt": TRANSCRIBE_PROMPT},
-    )
+    asr_model = whisperx.load_model("large-v3", device, compute_type="float16", language=language)
     align_model, align_metadata = whisperx.load_align_model(
         language_code=language, device=device
     )
@@ -172,6 +194,7 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
     )
     diarize_segments = diarize_model(audio)
     result = whisperx.assign_word_speakers(diarize_segments, result)
+    _restore_punctuation(result["segments"], device)
 
     Path(args.output).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
 

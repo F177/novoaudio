@@ -1,6 +1,11 @@
 import pytest
 
-from packages.pipeline.segmentation import Word, segment_words
+from packages.pipeline.segmentation import (
+    Word,
+    apply_punctuation,
+    needs_punctuation,
+    segment_words,
+)
 
 
 def test_empty_input_returns_no_segments() -> None:
@@ -270,3 +275,24 @@ def test_dominant_speaker_single_speaker_group() -> None:
     words = [Word("A", 0.0, 0.5, speaker="S1"), Word("B", 0.6, 1.0, speaker="S1")]
     segments = segment_words(words)
     assert segments[0].speaker == "S1"
+
+
+def test_needs_punctuation_only_for_long_unpunctuated_runs() -> None:
+    calm = (
+        "everyone's nervous everyone naturally is nervous but you're not you're calm you're not"
+    ).split()
+    assert needs_punctuation(calm)
+    assert not needs_punctuation("Hi, how are you? I'm fine, thanks.".split())
+
+
+def test_apply_punctuation_adds_marks_and_capitals_without_changing_words() -> None:
+    words = "but you're not you're calm you're relaxed".split()
+    marks = ["0", "0", ".", "0", ".", "0", "."]
+    assert apply_punctuation(words, marks) == [
+        "but", "you're", "not.", "You're", "calm.", "You're", "relaxed."
+    ]
+
+
+def test_apply_punctuation_keeps_existing_marks() -> None:
+    assert apply_punctuation(["Hello!", "you"], [",", "?"]) == ["Hello!", "You?"]
+

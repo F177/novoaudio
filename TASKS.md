@@ -15,6 +15,8 @@ Backlog em ordem de execução. Cada tarefa é uma sessão de Claude Code e um P
 
 Objetivo: provar que dá para dublar um vídeo real antes de construir produto. Nada de web, nada de banco.
 
+**Foco (2026-10-10):** o produto é dublagem em massa de YouTube Shorts para clippers (ver CLAUDE.md). Fala rápida com troca de locutor é o caso principal; o Short tem que sair bom sem edição; custo de GPU por Short importa.
+
 ### T0.1 — Scaffold do monorepo 🤖
 Estrutura de pastas conforme `CLAUDE.md`, `pyproject.toml` com ruff e pytest, `Makefile` com os comandos, `.env.example`, CI mínimo no GitHub Actions rodando lint e test.
 **Aceite:** `make lint && make test` passa num repo vazio.
@@ -174,22 +176,50 @@ Experimento em duas curvas, com ~10 amostras por ponto, medindo CER e duração:
 
 **Validação real:** vídeo padrão (`videos/`) rodado sem `--allow-timeline-overflow` (removido o workaround) — completou sem erro, 2,837s descartados nos mesmos segmentos de antes (mesma magnitude, agora tratado como legítimo, não bug). Durante a validação, dois bugs SEPARADOS (não deste gate) apareceram e foram corrigidos: (1) cache de `translations.json`/`synth/` de ANTES da T0.25 existir, inconsistente com a segmentação atual — resolvido limpando o cache obsoleto, não é falha da T0.25 (o mecanismo de hash funciona corretamente pra dados gerados depois dele existir); (2) `scripts/pod_runner.py::upload_to_pod` não limpava o diretório remoto antes de subir um diretório — reupload pra um `remote_job_dir` já usado aninhava o conteúdo novo dentro do antigo (`final_mixed_segments/final_mixed_segments/`), fazendo `cmd_evaluate` não achar o segmento esperado. Corrigido: `upload_to_pod` agora remove o destino remoto antes de subir quando `local_path` é diretório.
 
-### T0.27 — Latência de ressíntese no Pod 🤝
+## Reorientação para Shorts em massa (2026-10-10)
+
+As tarefas T0.30 a T0.33 entram **antes** da T0.27 e da T0.28, nesta ordem. Motivo: o Short padrão (`videos/`, streamer, 53 s) mostrou que a tradução é o elo mais fraco (cerca de 6 de 13 falas claramente erradas), que ~2,8 s de fala são cortados em diálogo rápido e que um Short custa ~5–6 min de GPU.
+
+### T0.30 — Tradução por janela de diálogo 🤝
+Hoje cada segmento é traduzido sozinho. Erros reais no Short padrão: "How much debt do you have?" → "Tá valendo quantos débitos tu tá com aí?"; "Here you" → "Aqui vcs"; "What are you talking about?" → "Vamos ver."; "job?" ficou em inglês; "q" e "vcs" ainda aparecem.
+1. **Janela de diálogo:** traduzir 10–20 segmentos de uma vez, com rótulo de locutor, devolvendo JSON com uma tradução por id de segmento. Validar 1:1 (um texto por segmento) com retry; levar as últimas traduções para a janela seguinte (consistência de termo e registro).
+2. **Fiel primeiro, encurtar depois** (método DT, ESTsoft, EMNLP 2025): uma passada fiel, sem pressão de orçamento. Só os segmentos acima do orçamento passam por encurtamento: 3 candidatos por rodada, mantém os que chegam mais perto do alvo, escolhe por COMET (`Unbabel/wmt22-comet-da`, Apache-2.0) usando a tradução fiel como referência, repete até caber. Substitui "5 candidatos por segmento ranqueados quase só por sílaba" e dá a `traducao_infiel` um sinal real.
+3. **Prompt de encurtar com ~5 exemplos fortemente comprimidos em pt-BR** (achado publicado: exemplos do mesmo tamanho fazem o modelo ignorar o limite).
+4. **Tom protegido:** rótulo de tom por segmento (emotion2vec da fonte + pistas do texto: palavrão, intensificador, pontuação). Encurtar corta enchimento e informação repetida primeiro; nunca interjeições, intensificadores, nível de palavrão ou `!`/`?`.
+5. **Modelo:** continua na classe 7–8B (rápido e barato; 30B descartado). Hunyuan-MT-7B só em A/B se a licença for aceitável (não vale na UE, Reino Unido e Coreia do Sul). Seed-X e Tower+ descartados (licença não comercial).
+
+Decisão pendente do usuário: política de palavrão (manter, suavizar ou por canal).
+**Aceite:** erros de tradução contados à mão, antes e depois, no Short padrão + ~30 segmentos de outros Shorts + os casos já conhecidos (NFL seg0022, T0.23) — caem. Nenhum candidato com alfabeto estrangeiro. Tempo de tradução por Short não aumenta. Aderência ao orçamento não piora.
+
+### T0.31 — Vozes de amostra por locutor 🤝
+Voz do criador clonada não é prioridade. Mas Short com dois locutores não pode soar como uma pessoa só. Banco pequeno de vozes pt-BR de amostra (ex.: 2 masculinas, 2 femininas), geradas com o próprio MOSS e escolhidas de ouvido — com energia, já que referência neutra puxa a entrega pro neutro. Cada locutor da diarização recebe uma voz diferente, escolhida pelo registro da voz original (F0 médio).
+**Aceite:** o Short padrão (2 locutores) sai com 2 vozes distintas e estáveis em todos os segmentos de cada locutor. CER round-trip não piora.
+
+### T0.32 — Vazão em lote 🤖
+Um Short de 53 s gasta ~5–6 min de GPU, e cada etapa recarrega o modelo para cada Short. `dub.py` passa a aceitar uma pasta de Shorts e roda cada etapa para N Shorts por carregamento de modelo. Avaliação final e comparação de emoção ficam opcionais ou por amostragem.
+**Aceite:** tempo de GPU por Short, por etapa, num lote de 10 Shorts, antes e depois. Saída idêntica à do processamento individual.
+
+### T0.33 — Fala curta em diálogo rápido 🤝
+Todo segmento abaixo de ~2 s sai com ~2,19 s (piso físico, T0.26) e é cortado contra o início do próximo — ~2,8 s de fala perdidos no Short padrão. Opções a medir: usar o silêncio entre segmentos antes de cortar; deslocar levemente o próximo segmento; sintetizar falas curtas seguidas juntas e redistribuir; acelerar até o teto de 1,5x antes de cortar.
+**Aceite:** fala cortada por Short, medida nos Shorts da T0.28, cai. Qualquer relaxamento de invariante tem decisão explícita do usuário.
+
+### T0.27 — Latência de ressíntese no Pod 🤝 (adiada para depois do portão)
+Com revisão rápida no lugar do editor detalhado, a ressíntese interativa de um segmento importa menos que a vazão em lote (T0.32). Continua valendo antes do editor.
 Decisão: até entrar em produção, todo trabalho de GPU roda no Pod; Serverless fica para a T1.2a. O que não precisa esperar é saber se a invariante 3 é viável com o modelo carregado, e isso dá para medir no Pod. Cronometre a ressíntese completa de um segmento isolado: lote de candidatos, retry quando a mediana sai da tolerância e avaliação — não só a geração (o lote de 3 sozinho já leva ~3,5 s). Se passar de 5 s, proponha a separação entre caminho interativo (menos candidatos, avaliador menor) e caminho em lote.
 
 Na mesma tarefa, congele `runpod/*/handler.py`: uma nota no topo do `runpod/README.md` dizendo que os handlers estão desatualizados e que a fonte de verdade é `scripts/pod_worker.py`, para ninguém editar ou fazer deploy deles por engano.
 **Aceite:** tempos (mediana e pior caso, em ~20 segmentos) anotados no `runpod/README.md`, separados por etapa. Nota de congelamento no README.
 
 ### T0.28 — Rotulagem humana e calibração das flags 👤 + 🤖
-Escolha 10 vídeos do conteúdo-alvo, de gêneros variados, com pelo menos metade de fala contínua de um locutor (review, educação, vlog). Os 5 vídeos de `phase1test/` servem de ponto de partida, mas precisam ser re-rodados depois das T0.19 a T0.25: os rótulos devem medir o pipeline atual.
+Escolha **20 Shorts** do conteúdo-alvo, variados: streamer, podcast, reação, comentário — com fala rápida e troca de locutor, que é o caso principal. Os vídeos de `phase1test/` e o Short padrão servem de ponto de partida, re-rodados com o pipeline atual.
 
-Rode o pipeline sem mudanças e rotule cada segmento como `ok` ou `corrigiria`, com o motivo em uma palavra. Salve em JSONL indexado por `segment_id` + revisão. Claude Code escreve o formato e o cálculo; o julgamento é seu. Se possível, outra pessoa brasileira rotula uma parte, para medir concordância.
+Rode o pipeline sem mudanças e rotule **cada Short** como `publicaria` ou `não publicaria`, e cada segmento como `ok` ou `corrigiria`, com o motivo em uma palavra (tradução, corte, voz, emoção, pronúncia, timing). Salve em JSONL indexado por `segment_id` + revisão. Claude Code escreve o formato e o cálculo; o julgamento é seu. Se possível, outra pessoa brasileira rotula uma parte, para medir concordância.
 
 O scorecard passa a calcular, contra os rótulos, a **taxa de correção** real (a métrica do portão) e a precisão e o recall de cada flag. Os limiares são escolhidos por ponto de operação nesses dados, nunca num vídeo só.
-**Aceite:** 10 vídeos rotulados (fecha também o aceite da T0.12). Taxa de correção por vídeo e agregada. Tabela de precisão e recall por flag. Limiares novos com justificativa escrita.
+**Aceite:** 20 Shorts rotulados (fecha também o aceite da T0.12). Taxa de publicação agregada; taxa de correção por segmento, por Short e agregada, com a contagem por motivo. Tabela de precisão e recall por flag. Limiares novos com justificativa escrita.
 
 ### 🚦 Portão de decisão
-Rode nos 10 vídeos da T0.28. **Se a taxa de correção — medida por rótulo humano, não por `any_flag_rate` — passar de 30%, pare e conserte o pipeline antes de tocar em produto.** Não construa web em cima de um pipeline que não funciona. Metas intermediárias medidas num clipe só (como os ≤40% no trailer de 8 segmentos) não contam para o portão.
+Rode nos 20 Shorts da T0.28. **Se menos de 70% dos Shorts saírem publicáveis sem edição — medido por rótulo humano, não por `any_flag_rate` — pare e conserte o pipeline antes de tocar em produto.** (70% é proposta a confirmar pelo usuário; antes o portão era 30% de segmentos corrigidos.) Não construa web em cima de um pipeline que não funciona. Metas intermediárias medidas num clipe só (como os ≤40% no trailer de 8 segmentos) não contam para o portão.
 
 **Se o portão falhar:** ataque a causa que mais aparece nos motivos dos rótulos, não a que a métrica automática aponta. Se for emoção ou entonação, o caminho é a T0.29.
 
@@ -266,7 +296,9 @@ Marca d'água em todo áudio gerado, aplicada na montagem, antes de qualquer dow
 Lista de projetos com status e progresso, upload, download do resultado. Sem editor ainda. Feio é aceitável.
 **Aceite:** três pessoas de fora conseguem dublar um vídeo sozinhas, sem instrução.
 
-### T1.7 — Perfil de voz por canal 🤝
+### T1.7 — Perfil de voz por canal 🤝 (baixa prioridade, 2026-10-10)
+Voz do criador é detalhe extra; vozes de amostra (T0.31) bastam. Só depois do produto sair bom, e com consentimento do dono da voz resolvido.
+
 Entidade `voice_profile`: áudio de referência do criador, embedding, reutilizado em todos os vídeos do canal. Extração automática do segmento mais limpo e longo do primeiro vídeo, com opção de substituir.
 **Aceite:** dois vídeos do mesmo canal produzem SECS ≥0,75 entre si.
 
@@ -277,6 +309,8 @@ Entidade `glossary_entry`: termo de origem, tradução fixa, pronúncia IPA opci
 ---
 
 ## Fase 2 — Editor
+
+**Reorientação (2026-10-10):** para clippers com volume, o primeiro passo é uma **revisão rápida** por Short — fila, prévia, aceitar / regenerar / rejeitar, trocar a tradução de uma fala. O editor detalhado abaixo vem depois, na ordem em que a T2.8 mostrar necessidade.
 
 ### T2.1 — Timeline de segmentos 🤖
 Lista virtualizada (pode ter centenas). Cada linha: texto original, tradução, duração alvo vs. real, flags destacadas. Player sincronizado que destaca o segmento em reprodução.

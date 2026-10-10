@@ -4,9 +4,13 @@ Contexto permanente do projeto. Leia antes de qualquer tarefa.
 
 ## O que é este projeto
 
-SaaS de dublagem automática de vídeo, inglês → português brasileiro, para YouTubers de médio e grande porte que querem alcançar o público brasileiro.
+SaaS de dublagem automática **em massa de YouTube Shorts**, inglês → português brasileiro. O usuário principal é o **clipper**: quem recorta e reposta clipes de criadores e quer levar esse conteúdo para o público brasileiro, ajudando o criador a crescer em outros países (decisão de 2026-10-10).
 
-O usuário faz upload de um vídeo, o sistema dubla automaticamente, e um **editor web** permite corrigir segmento a segmento antes de exportar. O produto não promete perfeição automática — promete erro visível e corrigível em dois cliques.
+O clipper sobe muitos Shorts de uma vez, o sistema dubla tudo automaticamente, e uma **revisão rápida** permite aceitar, regenerar ou rejeitar cada Short antes de exportar. Ninguém vai editar centenas de Shorts segmento a segmento: o produto precisa sair **bom sem edição** na maioria dos casos. Erros continuam visíveis e corrigíveis, mas o editor detalhado é secundário.
+
+O que define "bom", em ordem: tradução certa e natural em pt-BR falado, timing que não corta fala em diálogo rápido, energia e tom do original. Voz do criador clonada é detalhe extra, não prioridade — vozes de amostra pt-BR bastam por enquanto.
+
+Fala rápida, curta e cheia de troca de locutor é o caso **principal**, não um caso de borda. Custo e tempo de GPU por Short importam tanto quanto qualidade.
 
 Fundador solo. Prioridade absoluta: **simplicidade operacional e custo baixo em ociosidade**.
 
@@ -69,8 +73,8 @@ Hoje tudo isso roda num Pod de desenvolvimento via SSH, não em Serverless. Ver 
 - Sob orçamento apertado o modelo **trunca o texto** para caber. O segmento truncado bate a duração, então `fora_duracao` não detecta truncamento; use a flag lexical `truncado` (T0.14).
 - Campo `instruction` (estilo/emoção): **sempre `None`**. Com orçamento de `tokens` apertado, uma instrução de ênfase faz o modelo alongar a fala e pode entrar em loop de geração: 10/10 amostras em loop de 9–36 s para um alvo de ~4,6 s, contra 0/10 sem instrução (ver `docs/moss_tts_investigation.md`, 2026-09-19). Fala instruída sai naturalmente 1,7–2,4x mais longa que o orçamento normal. Não reative fora da T0.29.
 - Voz de referência: hoje é uma voz pt-BR sintética **fixa** para todo segmento e todo locutor (`POD_VOICE_REFERENCE`, default `voices/default_pt_br.wav`). Sem referência, o modelo sorteia um timbre por chamada. A referência também carrega o tom da fala: referência neutra puxa a entrega para o neutro (ver T0.29).
-- Piso de duração: `MIN_SYNTHESIS_SECONDS = 3,2 s`, e segmentos menores são fundidos com o vizinho antes da tradução. A explicação registrada (delay pattern, `n_vq=32`) ainda não foi separada do efeito de "texto curto sem contexto" (T0.26).
-- Teto de geração: `max_new_tokens = max(1024, 6 × tokens)`. Com segmentos de até 12 s, o piso de 1024 sempre vence (T0.24).
+- Piso de duração: `MIN_SYNTHESIS_SECONDS = 3,2 s`, e segmentos menores são fundidos com o vizinho do mesmo locutor antes da tradução. T0.26 separou as causas: a duração é determinística e governada pelo `tokens` (piso físico do delay pattern); o colapso de qualidade vem de texto com 1 palavra só, não de duração curta. Na prática, todo segmento abaixo de ~2 s sai com ~2,19 s e é cortado contra o início do próximo — é a principal perda de fala em diálogo rápido, ainda sem solução de projeto.
+- Teto de geração: `max_new_tokens = max(256, 4 × tokens)` (T0.24, calibrado contra 270 candidatos reais: máximo observado 173 passos).
 - Adapter LoRA experimental (`scripts/pod_lora_train.py`, `POD_LORA_ADAPTER_PATH`): melhorou sotaque, não estabilidade. Pausado.
 
 **Pós-processamento de áudio (achados medidos):**
@@ -85,7 +89,7 @@ Hoje tudo isso roda num Pod de desenvolvimento via SSH, não em Serverless. Ver 
 - `runpod/*/handler.py` está **congelado**: escrito em 2026-09-12, nunca validado e desatualizado. Não edite nem faça deploy. A fonte de verdade da lógica de modelo é `scripts/pod_worker.py` até a T1.2a.
 
 - `scripts/dub.py` roda na máquina local e orquestra via SSH. `scripts/pod_worker.py` roda num RunPod Pod e faz as chamadas de modelo, com um subcomando por estágio: `separate_stems`, `transcribe`, `translate`, `synthesize`, `evaluate`, `match_emotion`.
-- Receita estável: GPU **A40** (Ampere, sem MIG). Duas venvs: ASR com `torch 2.2.2+cu121`; TTS com `torch 2.9.1+cu128`.
+- Receita estável: GPU **A40** (Ampere, sem MIG). Duas venvs: ASR com `torch 2.8.0+cu128` (o whisperx atual exige torch ≥2.8); TTS com `torch 2.9.1+cu128` e `transformers==5.0.0` exato. Pod novo: suba `packages/`, `scripts/`, `pyproject.toml` e a voz de referência, depois rode `scripts/pod_setup.sh` no Pod — monta as duas venvs com as versões fixadas.
 - Não use pods com partição MIG: houve um bug de PyTorch/NVML específico de MIG (num pod Blackwell) sem correção possível.
 - Isso viola a invariante 7 de propósito, como harness de validação. Desligue o Pod ao fim de cada sessão.
 - Se o Pod estiver inacessível (timeout de SSH), pare e me avise. Não tente contornar.
@@ -154,7 +158,7 @@ Antes de dizer que uma tarefa está pronta, rode `make lint && make test`.
 ## Avaliação de qualidade
 
 - Flags por segmento em `quality.py`; agregação em `scorecard.py`. `traducao_infiel` e `locutor_suspeito` ainda são stubs.
-- **A métrica do portão da Fase 0 é a taxa de correção medida por rótulo humano (T0.28), não `any_flag_rate`.** As flags são proxies até serem calibradas contra rótulos.
+- **A métrica do portão da Fase 0 é a taxa de publicação por Short medida por rótulo humano (T0.28), com a taxa de correção por segmento como apoio — nunca `any_flag_rate`.** As flags são proxies até serem calibradas contra rótulos.
 - Todos os limiares são pontos de partida não calibrados: `CER_THRESHOLD=0.15`, `EMOTION_SIMILARITY_THRESHOLD=0.5`, `PITCH_FLATNESS_RATIO=0.5`, `LOOP_BURST_MARGIN=1.5`, bandas do veredito 20%/50%. **Nunca ajuste um limiar contra um vídeo só** — o produto recebe uploads arbitrários. `PROSODY_CORRELATION_THRESHOLD=0.3` existe mas não alimenta mais nenhuma flag (ver T0.20).
 - T0.19 (feito, 2026-10-05): `cer_final` agora transcreve o segmento recortado do `final_audio.wav` MIXADO (pós timeline + fundo + normalização), não mais o segmento seco pré-mix. `evaluate` não decodifica mais com `repetition_penalty`/`no_repeat_ngram_size` — a disambiguação entre loop real e alucinação do Whisper usa `quality.count_energy_bursts`/`loop_confirmed_by_bursts` (rajadas de energia no áudio seco vs. PALAVRAS esperadas da tradução — não sílabas, ver `docs/moss_tts_investigation.md`). Novo campo `QualityFlags.loop_confirmado`. Achado real do piso remedido (n=24): média subiu de 0,0127 para 0,0417 (0,0168 sem 1 outlier); referência muito curta (poucas palavras) corre risco de falso positivo em `cer_final_alto` por inserção alucinada do Whisper — risco conhecido, não corrigido.
 - T0.20 (feito, 2026-10-05): `entonacao_desalinhada` trocada de correlação de energia (tautológica com `apply_energy_envelope`, que impunha o mesmo contorno antes de medir) pra `quality.extract_pitch_stats` — desvio de F0 fonte vs. dublado; dublado muito mais monótono que a fonte sinaliza entrega achatada. `prosody_correlation` (energia) continua só como diagnóstico. Checagem real do emotion2vec (Avengers, 8 segmentos): incompatibilidade NÃO é dominada por neutro×neutro (0 dos 4 casos incompatíveis; só 1 dos 4 compatíveis), é sinal real na maioria — nenhuma mudança de código necessária. `scorecard.py` agora reporta `flag_overlap` (matriz de sobreposição) e `segments_with_multiple_flags`.
@@ -183,7 +187,9 @@ Antes de dizer que uma tarefa está pronta, rode `make lint && make test`.
 - **Glossário do canal** — termos recorrentes com tradução e pronúncia IPA fixas, por canal.
 - **CER round-trip** — sintetizar, transcrever com ASR, comparar com o texto de entrada.
 - **CER final** — CER do áudio retranscrito depois do pós-processamento, separado do CER usado para escolher o candidato. Hoje mede o segmento antes da mixagem; o alvo é medir o áudio mixado entregue (T0.19).
-- **Taxa de correção** — fração dos segmentos que um humano corrigiria, medida por rótulo. É a métrica do portão da Fase 0. Não confundir com `any_flag_rate`, que é a fração com alguma flag automática.
+- **Taxa de publicação** — fração dos Shorts que um humano publicaria sem nenhuma edição, medida por rótulo. É a métrica principal do portão da Fase 0 (um erro num Short de 30 s estraga o Short inteiro).
+- **Taxa de correção** — fração dos segmentos que um humano corrigiria, medida por rótulo. Métrica secundária: diz onde investir. Não confundir com `any_flag_rate`, que é a fração com alguma flag automática.
+- **Clipper** — usuário principal: recorta e reposta clipes de criadores, publica Shorts em volume.
 - **Instrução (MOSS)** — campo de texto livre do MOSS-TTS para estilo e emoção. Desligado; ver detalhes do MOSS-TTS.
 - **Harness de GPU** — o par `dub.py` + `pod_worker.py` via SSH da Fase 0. Temporário.
 

@@ -59,6 +59,7 @@ Config lida de variáveis de ambiente (ver `.env.example`):
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -189,6 +190,18 @@ def upload_to_pod(config: PodConfig, local_path: str, remote_relative_path: str)
 
 
 def download_from_pod(config: PodConfig, remote_relative_path: str, local_path: str) -> None:
+    """Baixa `remote_relative_path` do Pod pra `local_path`.
+
+    Mesmo bug do `upload_to_pod`, na direção contrária (achado real,
+    2026-10-10): `scp -r` copia um diretório remoto PRA DENTRO de um
+    diretório local que já existe (`synth/synth/`), deixando o
+    `synth_meta.json` e os WAVs antigos no nível esperado. Uma nova síntese
+    passava despercebida — a avaliação pedia candidatos que a rodada nova
+    não tinha gerado, e vídeos finais usaram áudio sintetizado de rodadas
+    anteriores. Diretório local existente é substituído, nunca mesclado.
+    """
+    if Path(local_path).is_dir():
+        shutil.rmtree(local_path)
     subprocess.run(
         [
             "scp",

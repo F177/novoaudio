@@ -132,6 +132,11 @@ def _patch_torch_compat_shims() -> None:
         torch.load = _torch_load_trusted_default
 
 
+TRANSCRIBE_PROMPT = (
+    "Hey, so, what do you think? I mean, it's crazy. No, I'm serious! Okay, let's go."
+)
+
+
 def cmd_transcribe(args: argparse.Namespace) -> None:
     _patch_torch_compat_shims()
     import whisperx
@@ -140,7 +145,17 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
     device = "cuda"
     language = "en"
 
-    asr_model = whisperx.load_model("large-v3", device, compute_type="float16", language=language)
+    # Achado real (2026-10-10): sem isso o Whisper devolvia trechos inteiros
+    # sem pontuação ("but you're not you're calm…"), e o tradutor invertia o
+    # sentido ("mas cê não tá calmo"). Um texto inicial pontuado faz ele
+    # pontuar; medido no Short "Power of Being Calm" e no do streamer.
+    asr_model = whisperx.load_model(
+        "large-v3",
+        device,
+        compute_type="float16",
+        language=language,
+        asr_options={"initial_prompt": TRANSCRIBE_PROMPT},
+    )
     align_model, align_metadata = whisperx.load_align_model(
         language_code=language, device=device
     )

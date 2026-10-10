@@ -188,7 +188,7 @@ Hoje cada segmento é traduzido sozinho. Erros reais no Short padrão: "How much
 4. **Tom protegido:** rótulo de tom por segmento (emotion2vec da fonte + pistas do texto: palavrão, intensificador, pontuação). Encurtar corta enchimento e informação repetida primeiro; nunca interjeições, intensificadores, nível de palavrão ou `!`/`?`.
 5. **Modelo:** continua na classe 7–8B (rápido e barato; 30B descartado). Hunyuan-MT-7B só em A/B se a licença for aceitável (não vale na UE, Reino Unido e Coreia do Sul). Seed-X e Tower+ descartados (licença não comercial).
 
-Decisão pendente do usuário: política de palavrão (manter, suavizar ou por canal).
+**Palavrão (decisão do usuário, 2026-10-10):** manter como no original. Não suavizar nem mudar o conteúdo — o mesmo nível de palavrão e de gíria do original vai pra tradução.
 **Aceite:** erros de tradução contados à mão, antes e depois, no Short padrão + ~30 segmentos de outros Shorts + os casos já conhecidos (NFL seg0022, T0.23) — caem. Nenhum candidato com alfabeto estrangeiro. Tempo de tradução por Short não aumenta. Aderência ao orçamento não piora.
 
 ### T0.31 — Vozes de amostra por locutor 🤝
@@ -219,7 +219,7 @@ O scorecard passa a calcular, contra os rótulos, a **taxa de correção** real 
 **Aceite:** 20 Shorts rotulados (fecha também o aceite da T0.12). Taxa de publicação agregada; taxa de correção por segmento, por Short e agregada, com a contagem por motivo. Tabela de precisão e recall por flag. Limiares novos com justificativa escrita.
 
 ### 🚦 Portão de decisão
-Rode nos 20 Shorts da T0.28. **Se menos de 70% dos Shorts saírem publicáveis sem edição — medido por rótulo humano, não por `any_flag_rate` — pare e conserte o pipeline antes de tocar em produto.** (70% é proposta a confirmar pelo usuário; antes o portão era 30% de segmentos corrigidos.) Não construa web em cima de um pipeline que não funciona. Metas intermediárias medidas num clipe só (como os ≤40% no trailer de 8 segmentos) não contam para o portão.
+Rode nos 20 Shorts da T0.28. **Se menos de 70% dos Shorts saírem publicáveis sem edição — medido por rótulo humano, não por `any_flag_rate` — pare e conserte o pipeline antes de tocar em produto.** (70% confirmado pelo usuário em 2026-10-10; antes o portão era 30% de segmentos corrigidos.) Não construa web em cima de um pipeline que não funciona. Metas intermediárias medidas num clipe só (como os ≤40% no trailer de 8 segmentos) não contam para o portão.
 
 **Se o portão falhar:** ataque a causa que mais aparece nos motivos dos rótulos, não a que a métrica automática aponta. Se for emoção ou entonação, o caminho é a T0.29.
 

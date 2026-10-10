@@ -8,6 +8,8 @@ SaaS de dublagem automática **em massa de YouTube Shorts**, inglês → portugu
 
 O clipper sobe muitos Shorts de uma vez, o sistema dubla tudo automaticamente, e uma **revisão rápida** permite aceitar, regenerar ou rejeitar cada Short antes de exportar. Ninguém vai editar centenas de Shorts segmento a segmento: o produto precisa sair **bom sem edição** na maioria dos casos. Erros continuam visíveis e corrigíveis, mas o editor detalhado é secundário.
 
+Tradução nunca muda o conteúdo: palavrão, gíria e tom saem como no original, sem suavizar (decisão de 2026-10-10).
+
 O que define "bom", em ordem: tradução certa e natural em pt-BR falado, timing que não corta fala em diálogo rápido, energia e tom do original. Voz do criador clonada é detalhe extra, não prioridade — vozes de amostra pt-BR bastam por enquanto.
 
 Fala rápida, curta e cheia de troca de locutor é o caso **principal**, não um caso de borda. Custo e tempo de GPU por Short importam tanto quanto qualidade.

@@ -35,6 +35,7 @@ FLAG_NAMES = (
     "cer_final_alto",
     "loop_confirmado",
     "segmento_curto",
+    "fala_fragmentada",
 )
 
 VERDICT_APROVADO = "aprovado"

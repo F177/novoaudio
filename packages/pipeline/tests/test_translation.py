@@ -62,6 +62,19 @@ def test_build_prompt_without_preserve_terms_omits_preserve_block() -> None:
     assert "preserve" not in prompt.lower() or "preserve_terms" not in prompt
 
 
+def test_build_prompt_without_continuation_omits_continuation_instruction() -> None:
+    prompt = build_prompt("Hello.", target_syllables=3)
+    assert "EM MEIO a uma frase" not in prompt
+
+
+def test_build_prompt_with_continuation_warns_not_to_drop_content() -> None:
+    prompt = build_prompt(
+        "for that. What are you talking about?", target_syllables=10, is_continuation=True
+    )
+    assert "EM MEIO a uma frase" in prompt
+    assert "não corte" in prompt.lower() or "nao corte" in prompt.lower()
+
+
 def test_extract_proper_nouns_catches_non_sentence_initial_capitalized_word() -> None:
     result = extract_proper_nouns(["I saw Marcus yesterday."])
     assert "Marcus" in result

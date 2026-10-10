@@ -37,6 +37,7 @@ FLAG_LABELS = {
     "cer_final_alto": "CER alto (áudio final)",
     "loop_confirmado": "Loop confirmado (repetição real)",
     "segmento_curto": "Segmento curto (sem fundir por troca de locutor)",
+    "fala_fragmentada": "Fala fragmentada (continuação de frase cortada)",
 }
 NOT_COMPUTED_FLAGS = {"traducao_infiel", "locutor_suspeito"}
 VERDICT_LABELS = {"aprovado": "Aprovado", "revisar": "Revisar", "problematico": "Problemático"}

@@ -53,7 +53,7 @@ Preserve a pontuação de ênfase do original ("!", "?", "...") — se a frase o
 pergunta, o candidato traduzido deve exclamar ou perguntar também, não virar uma afirmação \
 neutra. O sintetizador de voz não recebe indicação de tom além da pontuação do texto — perder \
 "!" nesse ponto é a única forma que ele tem de saber que a fala é emocionada, não narrada.
-{context_block}{preserve_block}
+{context_block}{continuation_block}{preserve_block}
 Frase original (inglês): "{source_text}"
 Orçamento aproximado: {target_syllables} sílabas — o candidato ideal fica perto disso, mas \
 prefira fidelidade e naturalidade a bater o número exato.
@@ -65,6 +65,27 @@ Contexto (frases vizinhas no vídeo — NÃO traduza, só use pra entender a con
 traduza apenas a "Frase original" abaixo):
 - Frase anterior (inglês): "{previous_text}"
 - Frase seguinte (inglês): "{next_text}"
+"""
+
+# T0.23+ achado real (vídeo padrão, revisão pedida pelo usuário depois de ver
+# erro real no vídeo): mesmo com o contexto acima, o modelo às vezes OMITE
+# parte do texto de um fragmento cortado no meio de uma frase (ex. "for
+# that." sumiu inteiro de "for that. What are you talking about?") ou
+# resolve pronome ambíguo errado (ex. "Here you" -> "Aqui vcs", plural
+# errado, quando o original é singular). `fala_fragmentada` (quality.py)
+# sinaliza isso de forma barata (primeira letra minúscula no texto
+# original — achado de que o WhisperX preserva a capitalização real da
+# fala, então minúscula no início É o segmento continuando uma frase, não
+# uma heurística aproximada). Quando sinalizado, a instrução abaixo é mais
+# direta que o bloco de contexto genérico: contexto é só pra resolver
+# referência, nunca motivo pra cortar conteúdo.
+_CONTINUATION_BLOCK_TEMPLATE = """
+ATENÇÃO: esta fala começa EM MEIO a uma frase (é a continuação de uma fala cortada por \
+pausa ou interrupção, não o início de uma frase nova — olhe a frase anterior no contexto \
+acima). Traduza TODO o conteúdo da frase original abaixo, palavra por palavra, mesmo que \
+pareça incompleta sozinha — não corte nenhuma cláusula achando que ela já foi dita no \
+contexto, e não resuma. O contexto serve SÓ para resolver pronome ou referência ambígua \
+("you", "it", "that", "her"), nunca para decidir o que omitir.
 """
 
 _PRESERVE_BLOCK_TEMPLATE = """
@@ -81,6 +102,7 @@ def build_prompt(
     previous_text: str | None = None,
     next_text: str | None = None,
     preserve_terms: list[str] | None = None,
+    is_continuation: bool = False,
 ) -> str:
     context_block = ""
     if previous_text or next_text:
@@ -88,6 +110,8 @@ def build_prompt(
             previous_text=previous_text or "(nenhuma, início do vídeo)",
             next_text=next_text or "(nenhuma, fim do vídeo)",
         )
+
+    continuation_block = _CONTINUATION_BLOCK_TEMPLATE if is_continuation else ""
 
     preserve_block = ""
     if preserve_terms:
@@ -98,6 +122,7 @@ def build_prompt(
         target_syllables=target_syllables,
         n_candidates=n_candidates,
         context_block=context_block,
+        continuation_block=continuation_block,
         preserve_block=preserve_block,
     )
 

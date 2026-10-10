@@ -453,6 +453,31 @@ def emocao_incompativel(
     return similarity < threshold
 
 
+def fala_fragmentada(texto_original: str) -> bool:
+    """Segmento cujo texto original (inglês) começa em minúscula — achado
+    real (vídeo padrão, 2026-10-09): o WhisperX preserva a capitalização
+    real da fala, então minúscula no início não é estilo, é o segmento
+    continuando uma frase cortada por pausa/interrupção, não começando uma
+    nova. Risco elevado de perda de fidelidade na tradução — o modelo só
+    vê o fragmento + frases vizinhas como contexto, e dados reais mostram
+    que ele às vezes omite uma cláusula inteira (`"for that."` sumiu de
+    `"for that. What are you talking about?"`) ou resolve pronome errado
+    (`"Here you"` -> `"Aqui vcs"`, plural, quando o original é singular).
+    `translation.build_prompt(..., is_continuation=True)` reage a este
+    mesmo sinal reforçando a instrução de não cortar conteúdo — esta
+    função expõe o MESMO sinal como flag pro editor, não calculado de
+    novo: ambos checam a mesma propriedade do texto original.
+
+    Heurística direta (não calculada por amostragem/calibração) — se um
+    dia o WhisperX normalizar capitalização por conta própria, isso para
+    de ser confiável; não observado até agora.
+    """
+    for ch in texto_original:
+        if ch.isalpha():
+            return ch.islower()
+    return False
+
+
 @dataclass
 class QualityFlags:
     fora_duracao: bool
@@ -467,6 +492,7 @@ class QualityFlags:
     cer_final_alto: bool = False
     loop_confirmado: bool = False
     segmento_curto: bool = False
+    fala_fragmentada: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

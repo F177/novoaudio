@@ -12,6 +12,7 @@ from packages.pipeline.quality import (
     clipping,
     count_energy_bursts,
     evaluate_segment,
+    fala_fragmentada,
     fora_duracao,
     has_repetition,
     locutor_suspeito,
@@ -275,4 +276,25 @@ def test_quality_flags_serializes_to_json() -> None:
         "cer_final_alto": False,
         "loop_confirmado": False,
         "segmento_curto": False,
+        "fala_fragmentada": False,
     }
+
+
+def test_fala_fragmentada_true_when_starts_lowercase() -> None:
+    assert fala_fragmentada("for that. What are you talking about?") is True
+
+
+def test_fala_fragmentada_false_when_starts_uppercase() -> None:
+    assert fala_fragmentada("What are you talking about?") is False
+
+
+def test_fala_fragmentada_skips_leading_punctuation_or_digits() -> None:
+    # Pontuação/dígito na frente não conta — olha a primeira letra real.
+    assert fala_fragmentada("...go get it") is True
+    assert fala_fragmentada("...Go get it") is False
+    assert fala_fragmentada("20 Minutes left") is False
+
+
+def test_fala_fragmentada_false_when_no_letters() -> None:
+    assert fala_fragmentada("123") is False
+    assert fala_fragmentada("") is False

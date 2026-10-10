@@ -219,6 +219,7 @@ def cmd_translate(args: argparse.Namespace) -> None:
             previous_text=job.get("previous_text"),
             next_text=job.get("next_text"),
             preserve_terms=job.get("preserve_terms"),
+            is_continuation=job.get("is_continuation", False),
         )
         messages = [{"role": "user", "content": prompt}]
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)

@@ -82,6 +82,7 @@ from packages.pipeline.quality import (
     count_energy_bursts,
     entonacao_desalinhada,
     extract_pitch_stats,
+    fala_fragmentada,
     fora_duracao,
     has_repetition,
     loop_confirmed_by_bursts,
@@ -631,6 +632,7 @@ def run_pipeline(
                 "previous_text": segments[i - 1].texto if i > 0 else None,
                 "next_text": segments[i + 1].texto if i < len(segments) - 1 else None,
                 "preserve_terms": preserve_terms,
+                "is_continuation": fala_fragmentada(s.texto),
             }
         )
     translate_hash = _hash_json(translate_jobs)
@@ -921,6 +923,12 @@ def run_pipeline(
                 # vizinho do MESMO locutor pra fundir — fica como está em
                 # vez de misturar a fala de duas pessoas.
                 segmento_curto=s.curto,
+                # Achado real (vídeo padrão): mesmo sinal usado em
+                # `translation.build_prompt(..., is_continuation=...)` —
+                # texto original começando em minúscula, continuação de
+                # frase cortada, risco elevado de perda de conteúdo/erro
+                # de referência na tradução.
+                fala_fragmentada=fala_fragmentada(s.texto),
                 # `emocao_incompativel` fica False aqui e é corrigido depois do
                 # loop (ver bloco "avaliação de emoção" abaixo) — precisa do
                 # lote inteiro pronto pra rodar o modelo remoto uma vez só.

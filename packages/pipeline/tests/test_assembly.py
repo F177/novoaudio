@@ -196,22 +196,66 @@ def test_place_segments_on_timeline_no_overlap_when_segments_fit() -> None:
     assert result.discarded_samples == 0
 
 
-def test_place_segments_on_timeline_raises_when_discard_spread_across_segments() -> None:
-    # Achado apontado pelo usuário: um threshold agregado alto esconderia
-    # bug real espalhado por VÁRIOS segmentos, mesmo com cada um pequeno
-    # (bem abaixo do teto físico de 1 segmento sozinho no piso). O caso
-    # legítimo só pode acontecer com 1 segmento (o mais próximo do fim do
-    # vídeo) — descarte em 3 segmentos diferentes é sinal de bug (ex.:
-    # `total_duration_seconds` medido errado), mesmo que cada um pareça
-    # pequeno isoladamente.
+def test_place_segments_on_timeline_raises_when_segment_starts_beyond_video_end() -> None:
+    # Um segmento cujo PRÓPRIO início já passa do fim medido do vídeo nunca
+    # é o piso de síntese — é `total_duration_seconds` errado ou timestamp
+    # de transcrição errado. Continua sinal de bug incondicionalmente,
+    # mesmo depois da revisão do T0.26 (ver `MAX_SINGLE_SEGMENT_DISCARD_SECONDS`).
     segments = [
-        TimedAudio(start_seconds=4.5, audio=_tone(1.0)),  # descarta 0.5s
+        TimedAudio(start_seconds=4.5, audio=_tone(1.0)),  # descarta 0.5s, começa dentro do vídeo
         TimedAudio(start_seconds=6.0, audio=_tone(1.0)),  # começa após o fim, descarta 1.0s
         TimedAudio(start_seconds=7.0, audio=_tone(1.0)),  # começa após o fim, descarta 1.0s
     ]
     with pytest.raises(TimelineOverflowError):
         place_segments_on_timeline(
             segments, total_duration_seconds=5.0, sample_rate=SAMPLE_RATE
+        )
+
+
+def test_place_segments_on_timeline_allows_several_independent_floor_segments() -> None:
+    # T0.26, achado real (vídeo padrão `videos/`): diálogo rápido com troca
+    # de locutor produz VÁRIOS segmentos curtos isolados (sem vizinho pra
+    # fundir, ver segmentation.py) no mesmo vídeo — cada um bate o piso
+    # físico de síntese individualmente, nenhum é bug. A versão antiga
+    # (limite de 1 segmento com descarte) levantava aqui incorretamente;
+    # revisado pra permitir qualquer número de segmentos, desde que CADA
+    # UM fique dentro do teto físico por segmento.
+    from packages.pipeline.assembly import MAX_SINGLE_SEGMENT_DISCARD_SECONDS
+
+    audio_seconds = MAX_SINGLE_SEGMENT_DISCARD_SECONDS - 0.1
+    # Gap de 2,0s entre inícios é menor que `audio_seconds` (~2,33s) — cada
+    # segmento descarta um pouco contra o início do próximo (ou o fim do
+    # vídeo pro último, mesmo gap de 2,0s), 4 descartes legítimos no total.
+    segments = [
+        TimedAudio(start_seconds=0.0, audio=_tone(audio_seconds)),
+        TimedAudio(start_seconds=2.0, audio=_tone(audio_seconds)),
+        TimedAudio(start_seconds=4.0, audio=_tone(audio_seconds)),
+        TimedAudio(start_seconds=6.0, audio=_tone(audio_seconds)),
+    ]
+    result = place_segments_on_timeline(
+        segments, total_duration_seconds=8.0, sample_rate=SAMPLE_RATE
+    )
+    assert result.discarded_samples > 0
+
+
+def test_place_segments_on_timeline_still_raises_if_any_floor_segment_exceeds_cap() -> None:
+    # A relaxação do T0.26 é por segmento, não um cheque em branco: mesmo
+    # com um segmento pequeno legítimo do lado, UM segmento cujo próprio
+    # DESCARTE (não a duração bruta) exceda o teto físico ainda é bug —
+    # aqui o 2º segmento tem pouquíssimo espaço (0,5s) até o próximo
+    # começar, então a maior parte do excedente é descartada de verdade.
+    from packages.pipeline.assembly import MAX_SINGLE_SEGMENT_DISCARD_SECONDS
+
+    ok_seconds = MAX_SINGLE_SEGMENT_DISCARD_SECONDS - 0.1
+    bad_seconds = MAX_SINGLE_SEGMENT_DISCARD_SECONDS + 1.0
+    segments = [
+        TimedAudio(start_seconds=0.0, audio=_tone(ok_seconds)),
+        TimedAudio(start_seconds=3.0, audio=_tone(bad_seconds)),
+        TimedAudio(start_seconds=3.5, audio=_tone(1.0)),
+    ]
+    with pytest.raises(TimelineOverflowError):
+        place_segments_on_timeline(
+            segments, total_duration_seconds=10.0, sample_rate=SAMPLE_RATE
         )
 
 

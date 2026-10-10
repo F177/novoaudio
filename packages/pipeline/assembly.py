@@ -45,12 +45,32 @@ MAX_DISCARDED_SECONDS = 0.5
 # de teste, e o produto precisa aguentar qualquer vídeo do público geral.
 # Um threshold agregado mais alto esconderia bug real espalhado por VÁRIOS
 # segmentos (ex.: 3 segmentos com 0,8s de erro cada, 2,4s no total, cada um
-# seria bug isolado mas passaria despercebido). A correção de verdade: o
-# caso legítimo só pode afetar UM segmento (o mais próximo do fim do
-# vídeo) e só até este teto físico — qualquer descarte além disso, ou
-# espalhado por mais de um segmento, continua sendo tratado como bug.
+# seria bug isolado mas passaria despercebido). A correção de verdade (na
+# época): o caso legítimo só pode afetar UM segmento (o mais próximo do
+# fim do vídeo) e só até este teto físico.
+#
+# Revisado (T0.26, 2026-10-09): essa suposição — "só UM segmento legítimo
+# por vídeo" — foi testada contra dado real e não se sustentou. Diálogo
+# rápido com troca de locutor (ver `segmentation.py`, fusão nunca atravessa
+# troca de locutor) produz VÁRIOS segmentos curtos e isolados no mesmo
+# vídeo, cada um sem vizinho pra fundir, cada um batendo o piso físico
+# individualmente — vídeo padrão real (`videos/`) teve 4 desses na mesma
+# timeline, nenhum bug, confirmado pela curva de duração do T0.26 (zero
+# variância, determinística, vem do `tokens`, não do conteúdo). O limite
+# de "1 segmento só com QUALQUER descarte" não distinguia esse caso
+# legítimo de um bug de verdade — revisado pra permitir QUALQUER NÚMERO de
+# segmentos cortados contra o início do próximo (ou fim do vídeo), desde
+# que CADA UM individualmente fique dentro deste teto físico.
+#
+# O que continua limitado a 1: um segmento cujo PRÓPRIO início
+# (`start_seconds`) já está além de `total_duration_seconds` — testado
+# isoladamente, não é o piso de síntese, é sinal de medição errada da
+# duração total ou timestamp de transcrição errado. Um só (o último
+# segmento do vídeo, por arredondamento de ponto flutuante bem na
+# borda) é esperado; dois ou mais indica que `total_duration_seconds`
+# está sistematicamente errado, mesmo que cada um sozinho descarte pouco.
 MAX_SINGLE_SEGMENT_DISCARD_SECONDS = (MIN_SYNTHESIS_SECONDS / MAX_TIME_STRETCH_RATIO) + 0.3
-MAX_SEGMENTS_WITH_DISCARD = 1
+MAX_SEGMENTS_STARTING_BEYOND_VIDEO = 1
 
 
 class TimelineOverflowError(RuntimeError):
@@ -82,7 +102,7 @@ def place_segments_on_timeline(
     *,
     max_discarded_seconds: float = MAX_DISCARDED_SECONDS,
     max_single_segment_discard_seconds: float = MAX_SINGLE_SEGMENT_DISCARD_SECONDS,
-    max_segments_with_discard: int = MAX_SEGMENTS_WITH_DISCARD,
+    max_segments_starting_beyond_video: int = MAX_SEGMENTS_STARTING_BEYOND_VIDEO,
 ) -> PlacementResult:
     """Cria uma faixa contínua do tamanho do vídeo original, com cada
     segmento posicionado no timestamp certo e silêncio no resto.
@@ -103,18 +123,24 @@ def place_segments_on_timeline(
     real não acontece mais — vira corte reportado em `discarded_samples`,
     sujeito aos mesmos gates de sanidade abaixo.
 
-    Dois gates independentes decidem se o corte é bug (`TimelineOverflowError`)
-    ou o caso legítimo de um segmento curto colado no fim do vídeo/do
-    próximo segmento (ver docstring de `MAX_SINGLE_SEGMENT_DISCARD_SECONDS`):
+    Três gates independentes decidem se o corte é bug (`TimelineOverflowError`)
+    ou o caso legítimo do piso físico de síntese (ver docstring de
+    `MAX_SINGLE_SEGMENT_DISCARD_SECONDS`):
 
     - Nenhum segmento individual pode descartar mais que
       `max_single_segment_discard_seconds` — acima disso não é mais o piso
       físico do MOSS-TTS, é outra coisa (como o caso real acima).
-    - No máximo `max_segments_with_discard` segmentos podem ter QUALQUER
-      descarte — o caso legítimo só pode acontecer com um; descarte
-      espalhado por vários segmentos é sinal de bug sistemático (timestamps
-      errados, `total_duration_seconds` errado), mesmo que cada um sozinho
-      pareça pequeno.
+    - No máximo `max_segments_starting_beyond_video` segmentos podem ter o
+      PRÓPRIO início (`start_seconds`) além de `total_duration_seconds` —
+      isso nunca é o piso de síntese (testado isoladamente de
+      `max_single_segment_discard_seconds`, ver T0.26): um só (o último
+      segmento do vídeo, por arredondamento bem na borda) é esperado; dois
+      ou mais é sinal de `total_duration_seconds` sistematicamente errado.
+    - Quantos segmentos cortados contra o início do PRÓXIMO segmento (sem
+      o próprio início passar do fim do vídeo) NÃO é mais limitado
+      (revisado no T0.26, 2026-10-09) — diálogo rápido com troca de locutor
+      produz vários desses no mesmo vídeo, legitimamente, sem ser bug,
+      desde que cada um sozinho respeite o teto físico acima.
 
     Um vídeo é qualquer coisa que o público geral mandar — estes limiares
     são físicos (derivados de constantes do modelo), não calibrados num
@@ -123,12 +149,14 @@ def place_segments_on_timeline(
     total_samples = int(round(total_duration_seconds * sample_rate))
     timeline = np.zeros(total_samples, dtype=np.float32)
     per_segment_discard: list[int] = []
+    segments_starting_beyond_video = 0
 
     ordered = sorted(segments, key=lambda s: s.start_seconds)
     for i, seg in enumerate(ordered):
         start_sample = int(round(seg.start_seconds * sample_rate))
         if start_sample >= total_samples:
             per_segment_discard.append(len(seg.audio))
+            segments_starting_beyond_video += 1
             continue
 
         boundary_sample = (
@@ -151,19 +179,20 @@ def place_segments_on_timeline(
     max_single_segment_discard_samples = int(
         round(max_single_segment_discard_seconds * sample_rate)
     )
-    segments_with_discard = sum(1 for d in per_segment_discard if d > 0)
 
     if discarded_samples > max_discarded_samples and (
-        segments_with_discard > max_segments_with_discard
+        segments_starting_beyond_video > max_segments_starting_beyond_video
         or max(per_segment_discard, default=0) > max_single_segment_discard_samples
     ):
+        segments_with_discard = sum(1 for d in per_segment_discard if d > 0)
         raise TimelineOverflowError(
             f"{discarded_samples} amostras descartadas ao posicionar segmentos na "
             f"timeline ({discarded_samples / sample_rate:.3f}s) em "
             f"{segments_with_discard} segmento(s) — acima do limiar de "
-            f"{max_discarded_seconds}s e fora do caso legítimo de 1 segmento no "
-            f"piso de duração (até {max_single_segment_discard_seconds:.2f}s), "
-            "isso não é arredondamento."
+            f"{max_discarded_seconds}s e fora do caso legítimo do piso de duração "
+            f"(até {max_single_segment_discard_seconds:.2f}s por segmento, no "
+            f"máximo {max_segments_starting_beyond_video} segmento(s) começando "
+            "depois do fim do vídeo), isso não é arredondamento."
         )
 
     return PlacementResult(timeline=timeline, discarded_samples=discarded_samples)

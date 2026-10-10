@@ -985,7 +985,7 @@ def run_pipeline(
             # na prática (não se descarta mais do que existe de timeline).
             max_discarded_seconds=total_duration + 1.0,
             max_single_segment_discard_seconds=total_duration + 1.0,
-            max_segments_with_discard=len(timed_segments),
+            max_segments_starting_beyond_video=len(timed_segments),
         )
     else:
         placement = place_segments_on_timeline(timed_segments, total_duration, SYNTH_SAMPLE_RATE)

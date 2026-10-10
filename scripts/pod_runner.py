@@ -61,6 +61,7 @@ from __future__ import annotations
 import os
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 _DEFAULT_PYTHON_ASR = "/root/venvs/asr/bin/python"
 _DEFAULT_PYTHON_TTS = "/root/venvs/tts/bin/python"
@@ -156,6 +157,22 @@ def run_on_pod(config: PodConfig, command: str, env: dict[str, str] | None = Non
 
 
 def upload_to_pod(config: PodConfig, local_path: str, remote_relative_path: str) -> None:
+    """Sobe `local_path` pro Pod em `remote_relative_path` (relativo a `config.workspace`).
+
+    Achado real (T0.26, 2026-10-09): `scp -r` não SUBSTITUI um diretório
+    remoto que já existe com o mesmo nome — ele copia `local_path` PRA
+    DENTRO dele, criando `remote/<nome>/<nome>/` aninhado. Reexecutar o
+    mesmo `--cache-dir` (comum: T0.25 pode pular etapas de GPU e reaproveitar
+    o mesmo `remote_job_dir`) deixava `final_mixed_segments/` remoto com o
+    conteúdo ANTIGO visível no nível esperado e o conteúdo NOVO escondido
+    um nível a mais — `cmd_evaluate` tentava ler um segmento que só existia
+    na rodada antiga (ou nem existia) e falhava com arquivo não encontrado,
+    silenciosamente incoerente com o que tinha sido sintetizado agora. Pra
+    diretório, limpa o destino remoto antes de subir — upload de diretório
+    é sempre "substituir", nunca "mesclar" com o que tinha antes.
+    """
+    if Path(local_path).is_dir():
+        run_on_pod(config, f"rm -rf {remote_relative_path}")
     subprocess.run(
         [
             "scp",

@@ -79,10 +79,12 @@ PT_BR = TargetLanguage(
     scripts=("LATIN",),
     extra_letters=frozenset("ªº"),
     style_rules=(
-        "Everyday spoken Brazilian Portuguese, as people talk in YouTube videos — never "
-        'formal or written style. Use "tá", "pra", "tô", "né" and "cê" where a Brazilian '
-        'would say them, and drop subject pronouns that speech drops ("Não sei", not '
-        '"Eu não sei").',
+        # Achado real (2026-10-10): uma regra mais forte de registro falado
+        # ("never formal", "drop subject pronouns") fez o Qwen 7B trocar
+        # você por "tu", errar "me manda" por "te manda" e inventar/cortar
+        # conteúdo. Contração leve, sem empurrar mais que isso.
+        'Spoken register: use contractions such as "tá", "pra", "cê", "tô", "né" when they '
+        "sound natural.",
         'Never use chat abbreviations ("vc", "vcs", "q", "pq", "tb", "tbm", "blz"); write the '
         "words in full.",
         '"you" addressing one person is "você" or "cê"; addressing several people is "vocês".',

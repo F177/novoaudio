@@ -199,6 +199,44 @@ def test_pick_best_synthesis_without_duration_data_ignores_duration() -> None:
     assert pick_best_synthesis(reference, hypotheses) == 1
 
 
+def test_pick_best_synthesis_picks_lowest_cer_among_clean_candidates() -> None:
+    # T0.24, achado real: a versão antiga devolvia o PRIMEIRO candidato que
+    # passasse em _is_bad_synthesis, mesmo que um candidato POSTERIOR na
+    # mesma categoria (limpo + dentro da duração) tivesse CER bem menor.
+    # Aqui os dois candidatos são "limpos" (sem repetição/truncamento) e
+    # batem a duração, mas cand0 tem erro de transcrição e cand2 é exato —
+    # o vencedor deve ser o de menor CER (índice 2), não o primeiro (0).
+    reference = "Eles chegaram tarde na festa ontem à noite."
+    hypotheses = [
+        "Eles chegaram tarde na festa ontem à noita.",  # 1 char errado
+        "Eles chegaram tarde na festa ontem à noite e ficaram pouco.",  # mais longo, CER maior
+        "Eles chegaram tarde na festa ontem à noite.",  # exato, CER 0
+    ]
+    winner = pick_best_synthesis(
+        reference,
+        hypotheses,
+        achieved_seconds=[5.0, 5.0, 5.0],
+        target_seconds=5.0,
+        tolerance=0.08,
+    )
+    assert winner == 2
+
+
+def test_pick_best_synthesis_ties_on_cer_break_by_closest_duration() -> None:
+    # Dois candidatos com o mesmo texto (mesmo CER) — o desempate é pela
+    # duração mais próxima do alvo, não pelo primeiro da lista.
+    reference = "Vamos embora agora."
+    hypotheses = ["Vamos embora agora.", "Vamos embora agora."]
+    winner = pick_best_synthesis(
+        reference,
+        hypotheses,
+        achieved_seconds=[3.5, 3.05],
+        target_seconds=3.0,
+        tolerance=0.5,
+    )
+    assert winner == 1
+
+
 def test_save_transcript_and_translation_writes_both_files(tmp_path) -> None:
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()

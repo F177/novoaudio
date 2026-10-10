@@ -388,12 +388,22 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
     # loop trava os outros 2 que já tinham terminado. Não faz sentido deixar
     # um candidato sabidamente ruim (repetição/alucinação — nunca é o
     # escolhido por `pick_best_synthesis`) correr até 4096: cortar mais cedo
-    # não piora a escolha final, só limita o desperdício. Teto escalado pelo
-    # orçamento real do job (6x tokens, piso 1024) em vez de um número fixo —
-    # cobre com folga o maior caso observado (446 passos pra ~150 tokens de
-    # orçamento) sem arriscar cortar um segmento longo legítimo.
-    MAX_NEW_TOKENS_MULTIPLIER = 6
-    MIN_MAX_NEW_TOKENS = 1024
+    # não piora a escolha final, só limita o desperdício.
+    #
+    # T0.24, achado real: com `MAX_NEW_TOKENS_MULTIPLIER=6` e segmentos de
+    # até ~12s (tokens≈150), 6×tokens nunca passa de 900 — o piso de 1024
+    # sempre venceu, o multiplicador nunca executou (código morto). O maior
+    # caso legítimo registrado acima (446 passos pra ~150 tokens, ~3x)
+    # calibra o novo multiplicador com margem (4x, não 3x exato — não ajuste
+    # limiar pra bater uma amostra só). Piso baixado pra 256: alto o bastante
+    # pra não cortar segmento curto legítimo (tokens≈40, 4×40=160 < piso),
+    # baixo o bastante pra não deixar o multiplicador morto de novo nos
+    # orçamentos usuais (a partir de tokens≈64, 4×tokens já supera 256). Cada
+    # chamada passa a registrar `steps_used` em `synth_meta.json` — a
+    # distribuição real de produção, não só o caso único documentado aqui,
+    # é o que deve recalibrar isso de novo se aparecer corte indevido.
+    MAX_NEW_TOKENS_MULTIPLIER = 4
+    MIN_MAX_NEW_TOKENS = 256
 
     def synthesize_batch(
         text: str,
@@ -402,7 +412,7 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
         out_dir: Path,
         job_id: str,
         instruction: str | None,
-    ) -> list[tuple[Path, float]]:
+    ) -> tuple[list[tuple[Path, float]], list[int]]:
         message = processor.build_user_message(
             text=text,
             language=language,
@@ -417,6 +427,14 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
         outputs = model.generate(
             input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=max_new_tokens
         )
+        # T0.24, achado real testando contra `generate()` de verdade: ao
+        # contrário do que o comentário antigo (acima) assumia, este
+        # `generate()` customizado NÃO devolve um tensor único padded pro
+        # tamanho da sequência mais longa do lote — devolve uma `list` de
+        # `(escalar, tensor[n_passos, n_canais])` por candidato, cada um já
+        # cortado no próprio tamanho real. "Passos usados" é por CANDIDATO,
+        # não por chamada — `shape[0]` do segundo tensor de cada item.
+        steps_used = [int(item[1].shape[0]) for item in outputs]
 
         sr = processor.model_config.sampling_rate
         results = []
@@ -425,7 +443,7 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
             cand_path = out_dir / f"{job_id}_cand{i}.wav"
             torchaudio.save(str(cand_path), audio.unsqueeze(0), sr)
             results.append((cand_path, audio.shape[-1] / sr))
-        return results
+        return results, steps_used
 
     def median_seconds(candidates: list[tuple[Path, float]]) -> float:
         seconds = sorted(secs for _, secs in candidates)
@@ -472,12 +490,14 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
         instruction = None
 
         tokens = duration_to_tokens(target_seconds)
-        candidates = synthesize_batch(text, tokens, reference, out_dir, job["id"], instruction)
+        candidates, steps_used = synthesize_batch(
+            text, tokens, reference, out_dir, job["id"], instruction
+        )
         attempts = 1
 
         if not is_within_tolerance(median_seconds(candidates), target_seconds, tolerance):
             tokens = adjust_tokens_for_retry(tokens, median_seconds(candidates), target_seconds)
-            candidates = synthesize_batch(
+            candidates, steps_used = synthesize_batch(
                 text, tokens, reference, out_dir, job["id"], instruction
             )
             attempts = 2
@@ -534,7 +554,7 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
                 # Mesmo N_CANDIDATES de sempre (lote extra, não é mais caro
                 # por amostra do que qualquer outra chamada) — só o GATILHO
                 # é raro, não o tamanho do lote extra.
-                extra_raw = synthesize_batch(
+                extra_raw, extra_steps_used = synthesize_batch(
                     text, tokens, reference, out_dir, f"{job['id']}_esc", instruction
                 )
                 extra: list[tuple[Path, float]] = []
@@ -543,6 +563,7 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
                     extra_path.rename(final_path)
                     extra.append((final_path, secs))
                 candidates = candidates + extra
+                steps_used = steps_used + extra_steps_used
                 within_tolerance = is_within_tolerance(
                     median_seconds(candidates), target_seconds, tolerance
                 )
@@ -552,8 +573,8 @@ def cmd_synthesize(args: argparse.Namespace) -> None:
             {
                 "id": job["id"],
                 "candidates": [
-                    {"path": cand_path.name, "achieved_seconds": secs}
-                    for cand_path, secs in candidates
+                    {"path": cand_path.name, "achieved_seconds": secs, "steps_used": steps}
+                    for (cand_path, secs), steps in zip(candidates, steps_used, strict=True)
                 ],
                 "achieved_seconds": median_seconds(candidates),
                 "tokens_used": tokens,

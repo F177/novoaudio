@@ -141,11 +141,13 @@ Fusão nunca atravessa troca de locutor. Grupo curto sem vizinho do mesmo locuto
 
 **Aceite:** re-traduzir e comparar à mão 30 segmentos de `phase1test/` antes e depois. Zero nome próprio traduzido nessa amostra. Aderência ao orçamento de sílabas (T0.8) não piora.
 
-### T0.24 — Seleção de candidato e teto de geração 🤖
+### T0.24 — Seleção de candidato e teto de geração 🤖 (feito, 2026-10-09)
 1. `pick_best_synthesis` devolve o **primeiro** candidato que passa, não o melhor. Entre os que passam, escolha pelo menor CER e, em empate, pela duração mais próxima do alvo. Não custa nada: os 3 candidatos já foram gerados e avaliados.
 2. Em `cmd_synthesize`, `max_new_tokens = max(1024, 6 × tokens)`. Com segmentos de até 12 s (150 tokens), 6× dá no máximo 900, então o piso de 1024 sempre vence e o multiplicador é código morto. Um candidato em loop segura o lote inteiro por 1024 passos. Registre o número de passos de cada candidato no `synth_meta.json` e calibre o teto pela distribuição real (o maior caso legítimo registrado é 446 passos para ~150 tokens, ~3×).
 
 **Aceite:** teste em que, entre dois candidatos que passam, vence o de menor CER. Teto calibrado com a distribuição registrada, sem cortar nenhum candidato legítimo num vídeo de teste.
+
+**Achado real de implementação:** o comentário antigo assumia que `generate()` em lote devolve um tensor único padded (passos por CHAMADA). Testado direto contra o modelo: `generate()` do MOSS-TTS devolve uma lista de `(escalar, tensor[n_passos, n_canais])`, um por candidato, já cortado no tamanho real — "passos usados" é por CANDIDATO, não por chamada. `steps_used` agora vai dentro de cada entrada de `candidates` em `synth_meta.json`. Teto recalibrado pra `MAX_NEW_TOKENS_MULTIPLIER=4`, `MIN_MAX_NEW_TOKENS=256` (piso baixo o bastante pro multiplicador não ficar morto de novo acima de tokens≈64, alto o bastante pro piso de síntese tokens≈40). **Validação real (NFL completo, 90 segmentos/270 candidatos, Pod):** `steps_used` máximo observado foi 173 (mínimo 75) — nenhum candidato chegou perto do novo teto (256 pro menor orçamento do vídeo), razão passos/tokens no máximo 1,9× (não os ~3× do pior caso histórico, nem precisou chegar lá) — zero candidato cortado. 39/90 jobs precisaram de retry, 0 precisaram de escalação, 17/90 saíram fora de tolerância mesmo após retry+stretch (não é regressão desta tarefa, consistente com limitações já conhecidas de calibração de duração).
 
 ### T0.25 — Cache por hash de entrada 🤖
 `scripts/dub.py` decide se refaz uma etapa só pela existência do arquivo (`needs()`). Os segmentos são recalculados a cada execução, mas `translations.json` e `synth/` são reaproveitados por posição (`seg0007`). Se a segmentação mudar com o mesmo `--cache-dir`, a tradução antiga do seg0007 é aplicada ao novo seg0007, sem erro nenhum. A única saída hoje é `--force`, que refaz tudo, inclusive Demucs e ASR.

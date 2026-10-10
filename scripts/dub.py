@@ -160,6 +160,13 @@ def pick_best_synthesis(
     (comportamento antigo); (4) nenhum serve — o de menor CER (ainda assim
     o "menos pior" — `_is_bad_synthesis` continua rodando sobre o vencedor
     depois, pra reportar a flag certa).
+
+    T0.24, achado real: dentro de cada categoria de prioridade, a versão
+    antiga devolvia o PRIMEIRO candidato que batesse a condição, não o
+    melhor — com os 3 candidatos já gerados e avaliados (CER já calculado
+    pra todos), comparar os que passam na mesma categoria e escolher o de
+    menor CER não custa nenhuma chamada extra. Empate de CER é desfeito
+    pela duração mais próxima do alvo.
     """
     if not hypotheses:
         return 0
@@ -169,22 +176,38 @@ def pick_best_synthesis(
             return False
         return is_within_tolerance(achieved_seconds[i], target_seconds, tolerance)
 
+    def duration_gap(i: int) -> float:
+        if achieved_seconds is None or target_seconds is None:
+            return 0.0
+        return abs(achieved_seconds[i] - target_seconds)
+
+    def best_of(indices: list[int]) -> int:
+        return min(
+            indices,
+            key=lambda i: (character_error_rate(reference_text, hypotheses[i]), duration_gap(i)),
+        )
+
     has_duration_data = achieved_seconds is not None and target_seconds is not None
 
-    for i, hyp in enumerate(hypotheses):
-        if within_duration(i) and not _is_bad_synthesis(reference_text, hyp):
-            return i
+    clean_and_within_duration = [
+        i for i, hyp in enumerate(hypotheses)
+        if within_duration(i) and not _is_bad_synthesis(reference_text, hyp)
+    ]
+    if clean_and_within_duration:
+        return best_of(clean_and_within_duration)
+
     if has_duration_data:
-        for i in range(len(hypotheses)):
-            if within_duration(i):
-                return i
-    for i, hyp in enumerate(hypotheses):
-        if not _is_bad_synthesis(reference_text, hyp):
-            return i
-    return min(
-        range(len(hypotheses)),
-        key=lambda i: character_error_rate(reference_text, hypotheses[i]),
-    )
+        within_duration_only = [i for i in range(len(hypotheses)) if within_duration(i)]
+        if within_duration_only:
+            return best_of(within_duration_only)
+
+    clean_only = [
+        i for i, hyp in enumerate(hypotheses) if not _is_bad_synthesis(reference_text, hyp)
+    ]
+    if clean_only:
+        return best_of(clean_only)
+
+    return best_of(list(range(len(hypotheses))))
 
 
 def _sanitize_for_dirname(name: str) -> str:

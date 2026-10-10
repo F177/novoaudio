@@ -131,11 +131,13 @@ Fusão nunca atravessa troca de locutor. Grupo curto sem vizinho do mesmo locuto
 
 **Aceite:** testes do normalizador para as abreviações. Teste de que o texto do job de síntese sai normalizado, que termo do glossário continua sendo aplicado e que IPA entre barras não é alterado. Regressão do caso `['...` rejeitado.
 
-### T0.23 — Tradução com contexto 🤝
+### T0.23 — Tradução com contexto 🤝 (feito, 2026-10-09)
 `packages/pipeline/translation.py`. Cada segmento é traduzido isolado: o prompt só recebe a frase. Consequências visíveis em `phase1test/`: nome próprio traduzido como palavra comum ("Hurts has time" → "Dói no instante!" — Hurts é o quarterback), frase partida entre segmentos traduzida em pedaços ("you" | "made it!"), termo inconsistente entre segmentos ("guitar" e "guitarra" no mesmo vídeo).
 - Passe no prompt o original do segmento anterior e do seguinte, só como contexto, sem traduzir.
 - Extraia uma vez por vídeo uma lista de nomes próprios e termos, e instrua o modelo a mantê-los.
 - Proíba abreviação de chat no prompt, mantendo as contrações faladas ("tá", "pra", "cê").
+
+**Validação real (30 segmentos do NFL de `phase1test/` — `.cache/dub_nfl/`, antes/depois, Qwen2.5-7B no Pod):** inconsistência de nome entre segmentos era real e sistemática — "Buda Baker" (seg0009) saía "Buda" sozinho em TODOS os 5 candidatos antes do contexto/preserve_terms, "Manning" (seg0024) desaparecia em 1 de 5. Depois: "Buda Baker" completo nos 5 candidatos de ambos os segmentos onde aparece, "Manning" presente nos 5. "Hurts"/"Barkley" (seg0001) já saíam corretos nos 5 candidatos antes E depois nesta amostra — o erro "Dói no instante!" do exemplo acima não reproduziu aqui (amostragem `do_sample=True`, não determinístico). Aderência ao orçamento de sílabas: score médio do candidato top em 30 segmentos, 0,838 antes vs 0,837 depois — sem regressão (diferença dentro do ruído de amostragem). `extract_proper_nouns` é heurística (capitalização fora de início de frase, sigla, ou repetição de início de frase em 2+ segmentos — sem lista de stopwords ficaria poluída por "Can"/"Has"/"Yeah" etc., sem heurística de repetição perderia nome próprio citado uma única vez, caso conhecido e documentado em teste). Achado paralelo, fora do escopo desta tarefa: seg0022 ("but evidently") produziu caractere chinês (`显而易见`) nos dois lados, antes e depois — vazamento de idioma do Qwen2.5, não relacionado a contexto/preserve_terms, não corrigido aqui.
 
 **Aceite:** re-traduzir e comparar à mão 30 segmentos de `phase1test/` antes e depois. Zero nome próprio traduzido nessa amostra. Aderência ao orçamento de sílabas (T0.8) não piora.
 

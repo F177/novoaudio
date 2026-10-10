@@ -31,6 +31,7 @@ feita — pendente.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from packages.ptbr.syllables import count_syllables
@@ -44,26 +45,147 @@ comprimentos diferentes, do mais compacto ao mais completo, todos fiéis ao sent
 
 Aproveite as alavancas do português falado sempre que fizer sentido: pro-drop (omitir sujeito \
 quando óbvio), voz ativa em vez de passiva, contrações do registro falado ("tá", "pra", "cê", \
-"tô", "né").
+"tô", "né"). Não use abreviação de chat/internet em nenhum candidato (ex.: "vc", "pq", "q", \
+"tb", "tbm", "blz") — escreva essas palavras por extenso; só as contrações de fala citadas \
+acima são permitidas.
 
 Preserve a pontuação de ênfase do original ("!", "?", "...") — se a frase original exclama ou \
 pergunta, o candidato traduzido deve exclamar ou perguntar também, não virar uma afirmação \
 neutra. O sintetizador de voz não recebe indicação de tom além da pontuação do texto — perder \
 "!" nesse ponto é a única forma que ele tem de saber que a fala é emocionada, não narrada.
-
+{context_block}{preserve_block}
 Frase original (inglês): "{source_text}"
 Orçamento aproximado: {target_syllables} sílabas — o candidato ideal fica perto disso, mas \
 prefira fidelidade e naturalidade a bater o número exato.
 
 Responda APENAS em JSON, sem markdown: {{"candidates": ["...", ...]}}"""
 
+_CONTEXT_BLOCK_TEMPLATE = """
+Contexto (frases vizinhas no vídeo — NÃO traduza, só use pra entender a continuidade; \
+traduza apenas a "Frase original" abaixo):
+- Frase anterior (inglês): "{previous_text}"
+- Frase seguinte (inglês): "{next_text}"
+"""
+
+_PRESERVE_BLOCK_TEMPLATE = """
+Nomes próprios e termos recorrentes neste vídeo — mantenha-os sem tradução em todo \
+candidato, com a grafia exata: {terms}
+"""
+
 
 def build_prompt(
-    source_text: str, target_syllables: int, *, n_candidates: int = N_CANDIDATES
+    source_text: str,
+    target_syllables: int,
+    *,
+    n_candidates: int = N_CANDIDATES,
+    previous_text: str | None = None,
+    next_text: str | None = None,
+    preserve_terms: list[str] | None = None,
 ) -> str:
+    context_block = ""
+    if previous_text or next_text:
+        context_block = _CONTEXT_BLOCK_TEMPLATE.format(
+            previous_text=previous_text or "(nenhuma, início do vídeo)",
+            next_text=next_text or "(nenhuma, fim do vídeo)",
+        )
+
+    preserve_block = ""
+    if preserve_terms:
+        preserve_block = _PRESERVE_BLOCK_TEMPLATE.format(terms=", ".join(preserve_terms))
+
     return PROMPT_TEMPLATE.format(
-        source_text=source_text, target_syllables=target_syllables, n_candidates=n_candidates
+        source_text=source_text,
+        target_syllables=target_syllables,
+        n_candidates=n_candidates,
+        context_block=context_block,
+        preserve_block=preserve_block,
     )
+
+
+# T0.23: palavras capitalizadas comuns em início de frase no inglês falado de
+# trailer/vídeo — sem essa lista, a regra "sentence-initial repetido em >=2
+# segmentos" (ver `extract_proper_nouns`) falsamente marcaria "The"/"Now"/"I"
+# como nome próprio em qualquer vídeo com mais de uma frase. Achado real
+# testando contra `phase1test/` (NFL, 90 segmentos de narração esportiva):
+# a lista original (artigos/pronomes) não bastava — verbos auxiliares/modais
+# ("Has", "Can") e interjeições de narração ("Yeah", "Look") também abrem
+# frase repetidamente sem serem nome próprio. Ampliada, não específica da
+# NFL (são palavras comuns do inglês falado em geral, não termos do esporte).
+_SENTENCE_STARTER_STOPWORDS = {
+    "a", "an", "the", "this", "that", "these", "those", "we", "you", "he", "she",
+    "they", "it", "i", "my", "your", "his", "her", "our", "their", "yes", "no",
+    "ok", "okay", "and", "but", "so", "now", "well", "oh", "hey", "here", "there",
+    "what", "who", "when", "where", "why", "how", "let's", "lets", "don't", "dont",
+    "can't", "cant", "just", "if", "then", "there's", "theres", "it's", "its",
+    "we're", "were", "you're", "youre", "i'm", "im", "all", "come", "go",
+    "that's", "thats", "he's", "hes", "she's", "shes", "can", "could", "should",
+    "would", "will", "may", "might", "must", "has", "have", "had", "is", "was",
+    "does", "did", "do", "one", "two", "three", "four", "five", "six", "seven",
+    "eight", "nine", "ten", "look", "watch", "see", "wow", "boom", "runs", "run",
+    "for", "to", "with", "on", "in", "at", "yeah", "yep", "nope", "alright",
+}
+
+_WORD_PATTERN = re.compile(r"[A-Za-z][A-Za-z']*")
+_SENTENCE_SPLIT_PATTERN = re.compile(r"[.!?]+")
+
+
+def extract_proper_nouns(texts: list[str]) -> list[str]:
+    """Heurística pra achar nomes próprios/termos recorrentes num vídeo inteiro.
+
+    Não é NER real — não há modelo de reconhecimento de entidade no pipeline
+    (invariante de simplicidade/custo do CLAUDE.md). Um nome próprio é
+    sinalizado quando a palavra capitalizada:
+    - aparece FORA do início de frase pelo menos uma vez (sentence-initial é
+      ambíguo: qualquer palavra comum capitaliza ali); ou
+    - é toda em maiúsculas com 2+ letras (sigla/acrônimo, ex. "NFL", "GT3"); ou
+    - aparece capitalizada no início de frase em 2+ segmentos DIFERENTES — uma
+      palavra comum não teria motivo pra se repetir assim entre falas
+      distintas, mas um nome de jogador/personagem citado várias vezes sim.
+
+    Palavras da lista `_SENTENCE_STARTER_STOPWORDS` (artigos, pronomes,
+    conectivos comuns de início de frase) nunca são sinalizadas, mesmo se
+    baterem a regra de repetição — do contrário qualquer vídeo com >1 frase
+    marcaria "The"/"Now"/"I" como nome próprio.
+
+    Critério de aceite da T0.23 é checagem MANUAL (comparar 30 segmentos
+    reais) — esta função é um ponto de partida pro prompt, não a validação.
+    """
+    sentence_initial_counts: dict[str, set[int]] = {}
+    non_initial_hit: set[str] = set()
+    first_seen_spelling: dict[str, str] = {}
+
+    for seg_index, text in enumerate(texts):
+        for sentence in _SENTENCE_SPLIT_PATTERN.split(text):
+            words = _WORD_PATTERN.findall(sentence)
+            for position, word in enumerate(words):
+                # len<2 descarta letra solta colada a número por tokenização
+                # (achado real: "6X gloves" -> ['X'] isolado, "X" não é nome).
+                if len(word) < 2 or not word[0].isupper():
+                    continue
+                key = word.lower()
+                if key not in first_seen_spelling:
+                    first_seen_spelling[key] = word
+                if position == 0:
+                    sentence_initial_counts.setdefault(key, set()).add(seg_index)
+                else:
+                    non_initial_hit.add(key)
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        for sentence in _SENTENCE_SPLIT_PATTERN.split(text):
+            for word in _WORD_PATTERN.findall(sentence):
+                key = word.lower()
+                if key in seen or key in _SENTENCE_STARTER_STOPWORDS:
+                    continue
+                if len(word) < 2 or not word[0].isupper():
+                    continue
+                is_acronym = word.isupper() and len(word) >= 2
+                is_repeated_sentence_initial = len(sentence_initial_counts.get(key, ())) >= 2
+                if key in non_initial_hit or is_acronym or is_repeated_sentence_initial:
+                    seen.add(key)
+                    result.append(first_seen_spelling[key])
+    return result
 
 
 def _extract_json_object(text: str) -> str:

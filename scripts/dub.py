@@ -93,6 +93,7 @@ from packages.pipeline.scorecard import build_scorecard
 from packages.pipeline.segmentation import Segment, Word, segment_words
 from packages.pipeline.subtitles import build_srt
 from packages.pipeline.synthesis import MIN_SYNTHESIS_SECONDS, is_within_tolerance
+from packages.pipeline.translation import extract_proper_nouns
 from scripts import r2
 from scripts.pod_runner import PodConfig, download_from_pod, run_on_pod, upload_to_pod
 
@@ -514,6 +515,11 @@ def run_pipeline(
     # --- 5. tradução com restrição de sílabas (remoto, Qwen2.5) ---
     translations_path = cached("translations.json")
     if needs(translations_path):
+        # T0.23: termos extraídos uma vez do vídeo inteiro (não por segmento)
+        # — nome próprio citado em vários trechos (ex. "Hurts" o quarterback)
+        # só é reconhecível como recorrente olhando o vídeo todo, não a frase
+        # isolada que cada job vê.
+        preserve_terms = extract_proper_nouns([s.texto for s in segments])
         translate_jobs = []
         for i, s in enumerate(segments):
             pause_seconds = sum(p.duration for p in s.pausas_internas)
@@ -526,6 +532,9 @@ def run_pipeline(
                     "id": f"seg{i:04d}",
                     "source_text": s.texto,
                     "target_syllables": max(1, target_syllables),
+                    "previous_text": segments[i - 1].texto if i > 0 else None,
+                    "next_text": segments[i + 1].texto if i < len(segments) - 1 else None,
+                    "preserve_terms": preserve_terms,
                 }
             )
         (cache_dir / "translate_jobs.json").write_text(

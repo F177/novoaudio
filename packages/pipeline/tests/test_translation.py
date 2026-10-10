@@ -4,6 +4,7 @@ import pytest
 
 from packages.pipeline.translation import (
     build_prompt,
+    extract_proper_nouns,
     parse_candidates,
     rank_candidates,
     score_candidate,
@@ -25,6 +26,77 @@ def test_build_prompt_mentions_spoken_ptbr_levers() -> None:
 def test_build_prompt_asks_to_preserve_emphasis_punctuation() -> None:
     prompt = build_prompt("Hello!", target_syllables=3)
     assert "ênfase" in prompt
+
+
+def test_build_prompt_forbids_chat_abbreviations_but_keeps_spoken_contractions() -> None:
+    prompt = build_prompt("Hello.", target_syllables=3)
+    assert "abreviação de chat" in prompt
+    assert '"tá"' in prompt
+
+
+def test_build_prompt_without_context_omits_context_block() -> None:
+    prompt = build_prompt("Hello.", target_syllables=3)
+    assert "Contexto" not in prompt
+
+
+def test_build_prompt_includes_neighbor_context_but_marks_it_not_to_translate() -> None:
+    prompt = build_prompt(
+        "Hello.",
+        target_syllables=3,
+        previous_text="He ran fast.",
+        next_text="She won.",
+    )
+    assert "He ran fast." in prompt
+    assert "She won." in prompt
+    assert "NÃO traduza" in prompt
+
+
+def test_build_prompt_includes_preserve_terms() -> None:
+    prompt = build_prompt("Hello.", target_syllables=3, preserve_terms=["Hurts", "NFL"])
+    assert "Hurts" in prompt
+    assert "NFL" in prompt
+
+
+def test_build_prompt_without_preserve_terms_omits_preserve_block() -> None:
+    prompt = build_prompt("Hello.", target_syllables=3)
+    assert "preserve" not in prompt.lower() or "preserve_terms" not in prompt
+
+
+def test_extract_proper_nouns_catches_non_sentence_initial_capitalized_word() -> None:
+    result = extract_proper_nouns(["I saw Marcus yesterday."])
+    assert "Marcus" in result
+
+
+def test_extract_proper_nouns_catches_acronym() -> None:
+    result = extract_proper_nouns(["The NFL season starts today."])
+    assert "NFL" in result
+
+
+def test_extract_proper_nouns_catches_name_repeated_sentence_initial_across_segments() -> None:
+    # "Hurts" (sobrenome do quarterback) só aparece no início de frase, mas em
+    # dois segmentos diferentes — achado real do T0.23 (ver TASKS.md).
+    result = extract_proper_nouns(["Hurts has time.", "Hurts threw deep."])
+    assert "Hurts" in result
+
+
+def test_extract_proper_nouns_ignores_common_sentence_starters() -> None:
+    result = extract_proper_nouns(["The game is close.", "The crowd roars."])
+    assert "The" not in result
+
+
+def test_extract_proper_nouns_ignores_single_occurrence_sentence_initial_word() -> None:
+    # Ambíguo (pode ser nome próprio citado uma vez só, ou palavra comum que
+    # calha de abrir a única frase) — a função prefere não marcar, critério
+    # de aceite da T0.23 é checagem manual, não recall perfeito. Limitação
+    # conhecida: um nome próprio citado uma única vez, só no início de
+    # frase, escapa desta heurística.
+    result = extract_proper_nouns(["Marcus ran fast."])
+    assert "Marcus" not in result
+
+
+def test_extract_proper_nouns_dedupes_preserving_first_spelling() -> None:
+    result = extract_proper_nouns(["I met Marcus.", "Marcus again, I met Marcus."])
+    assert result.count("Marcus") == 1
 
 
 def test_parse_candidates_extracts_list() -> None:

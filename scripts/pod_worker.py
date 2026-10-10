@@ -213,7 +213,12 @@ def cmd_translate(args: argparse.Namespace) -> None:
     def build_prompt_text(job: dict) -> str:
         n_candidates = job.get("n_candidates", N_CANDIDATES)
         prompt = build_prompt(
-            job["source_text"], job["target_syllables"], n_candidates=n_candidates
+            job["source_text"],
+            job["target_syllables"],
+            n_candidates=n_candidates,
+            previous_text=job.get("previous_text"),
+            next_text=job.get("next_text"),
+            preserve_terms=job.get("preserve_terms"),
         )
         messages = [{"role": "user", "content": prompt}]
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)

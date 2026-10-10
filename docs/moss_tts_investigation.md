@@ -684,3 +684,92 @@ estilo, T0.29). Renderizado no dashboard local.
 - Escopo do produto continua EN→pt-BR. "Diversos idiomas" foi motivação
   pra investir na correção de raiz, não um novo requisito de multi-idioma
   agora.
+
+## 2026-10-09 — T0.26: duas curvas reais pra isolar a causa do piso de 3,2s
+
+Experimento controlado no Pod (`scripts/experiment_t026_synthesis_floor.py`,
+MOSS-TTS, venv TTS; CER via `pod_worker.py evaluate`, venv ASR; `tokens=25`
+fixo pra curva B, frase de referência "Ele decide sair de casa agora mesmo
+rapidinho", `instruction=None` como já em produção). N=10 por ponto, 90
+amostras no total.
+
+**Curva (a) — frase fixa (8 palavras), `tokens` variando:**
+
+| tokens | duração alcançada | passos (`steps_used`) | CER médio | CER máximo | repetição |
+|---|---|---|---|---|---|
+| 13 | 1,20s (1,12–1,28, pequena variância) | 50 | 0,264 | 0,533 | 0/10 |
+| 19 | 1,60s (exato, 0 variância) | 54 | 0,047 | 0,222 | 0/10 |
+| 25 | 2,08s (exato, 0 variância) | 60 | 0,011 | 0,067 | 0/10 |
+| 32 | 2,64s (exato, 0 variância) | 67 | 0,000 | 0,000 | 0/10 |
+| 40 | 3,28s (exato, 0 variância) | 75 | 0,000 | 0,000 | 0/10 |
+
+**Curva (b) — `tokens=25` fixo (duração forçada em 2,08s), tamanho do texto variando:**
+
+| palavras | texto | CER médio | CER máximo | exemplo de hipótese |
+|---|---|---|---|---|
+| 1 | "Ele" | **1,167** | 2,667 | "Ele ã...", "Uhum, ele..." |
+| 2 | "Ele decide" | 0,020 | 0,200 | "Ele decide.", "ele decide..." |
+| 4 | "Ele decide sair de" | 0,017 | 0,167 | "Ele decide sair de..." |
+| 8 | "Ele decide sair de casa agora mesmo rapidinho" | 0,033 | 0,222 | "Ele decide sair de casa agora mesmo rapidinho." |
+
+**Achados reais, não hipóteses:**
+
+1. **Duração é determinística e governada quase inteiramente por `tokens`,
+   não pelo conteúdo.** Na curva (a), variância entre as 10 amostras é
+   zero (ou quase) em todo ponto — mesmo com `audio_temperature=1,7`. Na
+   curva (b), as 4 variações de tamanho de texto, com o MESMO `tokens=25`,
+   produziram a MESMA duração exata (2,08s) em 40/40 amostras. `steps_used`
+   segue um deslocamento quase fixo acima de `tokens` (+37, +35, +35, +35,
+   +35 — não perfeitamente constante, mas próximo), não relacionado ao
+   texto. **Isso confirma o mecanismo do "delay pattern" (n_vq) como causa
+   real da duração mínima** — é estrutural do decoder, não um efeito de
+   falta de contexto.
+
+2. **Mas a causa do COLAPSO de qualidade não é duração — é contagem de
+   palavras, e o efeito é descontínuo.** 1 palavra forçada a preencher
+   2,08s produz CER catastrófico (1,167 de média, pior que transcrever
+   silêncio) — o modelo preenche o excesso com muletas de fala
+   ("ã...", "Uhum,"), não repetição/loop (`has_repetition` ficou 0/10 em
+   todos os pontos, inclusive este). A partir de 2 palavras, CER cai pra
+   ~0,02-0,03 e praticamente não muda indo pra 4 ou 8 — não é uma curva
+   gradual, é um degrau entre 1 e 2 palavras.
+
+3. **Truncamento por orçamento baixo (curva a, tokens=13) degrada CER
+   suavemente (0,264), sem instabilidade.** Não reproduzi aqui o "áudio
+   vazio/garbled" documentado antes pra tokens muito baixos — mas não
+   testei abaixo de tokens=13 (fora do desenho do experimento pedido em
+   TASKS.md), então não descarto que o colapso catastrófico apareça abaixo
+   desse ponto. O que dá pra afirmar com os dados coletados: entre
+   tokens=13 e tokens=40, com conteúdo de 2+ palavras, o pior caso é
+   truncamento gracioso, não colapso.
+
+**Conclusão — duas causas reais e INDEPENDENTES, não uma:**
+- Piso de duração física (delay pattern, n_vq): confirmado, estrutural,
+  independente de conteúdo. `MIN_SYNTHESIS_SECONDS=3,2s` continua
+  justificado como proteção contra isso — não encontrei evidência pra
+  revisar pra baixo com segurança (não testei tokens<13, e a curva (a)
+  usou só UMA frase; não é base suficiente pra mudar um limiar de
+  produto, mesma razão de `docs/calibration` nunca ser ajustado num vídeo
+  só).
+- Piso de CONTEÚDO (palavras), separado da duração: um segmento com ≥2
+  palavras sintetiza bem em QUALQUER duração testada aqui (curta ou
+  longa); só 1 palavra isolada colapsa, independente de quanto tempo é
+  pedido pra ela ocupar. **A fusão atual (`_merge_short_groups`) funde
+  por DURAÇÃO, sem olhar contagem de palavras — um segmento de 2-3
+  palavras curto em tempo (fala rápida) é fundido com o vizinho mesmo
+  tendo conteúdo suficiente pra sintetizar bem sozinho.**
+
+**Alternativa à fusão cega, proposta (não implementada — decisão de
+produto, não tomada nesta sessão):** separar os dois critérios.
+Continuar fundindo só segmentos com <2 palavras reais (a condição que
+realmente colapsa) OU que fiquem abaixo do piso físico de duração
+DEPOIS de considerar a compressão já existente (`time_stretch_to_duration`,
+até 1,5x); segmentos com ≥2 palavras e duração curta passariam a ser
+sintetizados no piso físico (3,2s) e comprimidos de volta pro alvo real,
+em vez de fundidos com o vizinho — preserva a independência de tradução/
+tempo de cada segmento (o editor nunca precisa separar uma fusão que o
+usuário não pediu, invariante 5 do CLAUDE.md), ao custo de mais segmentos
+passando por compressão. Não implementado: decisão de produto sobre
+trocar o critério de fusão, fora do escopo de "isolar a causa" desta
+tarefa — fica para confirmação explícita antes de qualquer mudança em
+`segmentation.py`.

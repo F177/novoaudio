@@ -159,7 +159,7 @@ Aplicado às 5 etapas que tinham o bug de reúso por existência de arquivo: `se
 
 **Validação real:** rodando o vídeo padrão (`videos/`) duas vezes seguidas sem mudar nada — a 2ª rodada não chamou `separate_stems`/`transcribe`/`translate`/`synthesize`/`evaluate` no Pod (ausentes do log de timing), só as etapas já sem cache de antes (`evaluate_final`, `match_emotion`, uploads). Confirma que o hash não gera reprocessamento espúrio quando a entrada não mudou — tão importante quanto invalidar quando muda.
 
-### T0.26 — Isolar a causa do piso de 3,2 s 🤝
+### T0.26 — Isolar a causa do piso de 3,2 s 🤝 (feito, 2026-10-09)
 `MIN_SYNTHESIS_SECONDS = 3,2 s` decide a segmentação do vídeo inteiro: tudo abaixo disso é fundido com o vizinho. A explicação registrada (delay pattern com `n_vq=32`) foi confirmada em 2 de 3 casos, e o próprio log mostra um segundo fator misturado: texto curto sem contexto ("decide" falha com 100 tokens, mas funciona dentro de uma frase com 40). Em conteúdo de diálogo rápido essa regra pesa muito: em `phase1test/`, 20 de 33 segmentos do Lego Batman e 47 de 88 do NFL estão abaixo de 3,2 s.
 
 Experimento em duas curvas, com ~10 amostras por ponto, medindo CER e duração:
@@ -167,6 +167,8 @@ Experimento em duas curvas, com ~10 amostras por ponto, medindo CER e duração:
 - (b) `tokens` fixos, variando o tamanho do texto (1, 2, 4, 8 palavras).
 
 **Aceite:** as duas curvas documentadas. Piso revisado ou mantido, com justificativa. Se a causa for falta de contexto e não duração, proponha uma alternativa à fusão.
+
+**Resultado real (`scripts/experiment_t026_synthesis_floor.py`, 90 amostras, N=10/ponto — números completos em `docs/moss_tts_investigation.md`, 2026-10-09):** são DUAS causas independentes, não uma. (1) Duração é determinística e governada quase só por `tokens` — zero variância entre amostras, mesmo texto com 4 tamanhos diferentes e mesmo `tokens` produziu a MESMA duração exata nas 40 amostras. Confirma o delay pattern (n_vq) como causa física real da duração mínima. (2) O colapso de qualidade (CER catastrófico, 1,167 de média) não vem de duração curta — vem de contagem de palavras: 1 palavra forçada a preencher 2,08s degenera em muleta de fala ("ã...", "Uhum,"), sem repetição/loop; a partir de 2 palavras CER cai pra ~0,02-0,03 e não piora mais indo pra 4 ou 8. **Piso MANTIDO em 3,2s** — nenhuma evidência coletada (não testei tokens<13, só uma frase) justifica baixá-lo com segurança, mesmo princípio de nunca calibrar limiar de produto num experimento só. Alternativa à fusão cega PROPOSTA mas NÃO implementada (decisão de produto pendente): fundir só segmentos com <2 palavras reais; segmentos com ≥2 palavras e duração curta sintetizam no piso físico e comprimem de volta (`time_stretch_to_duration`, já existe) em vez de fundir com o vizinho — preserva independência de segmento (invariante 5) ao custo de mais compressão.
 
 ### T0.27 — Latência de ressíntese no Pod 🤝
 Decisão: até entrar em produção, todo trabalho de GPU roda no Pod; Serverless fica para a T1.2a. O que não precisa esperar é saber se a invariante 3 é viável com o modelo carregado, e isso dá para medir no Pod. Cronometre a ressíntese completa de um segmento isolado: lote de candidatos, retry quando a mediana sai da tolerância e avaliação — não só a geração (o lote de 3 sozinho já leva ~3,5 s). Se passar de 5 s, proponha a separação entre caminho interativo (menos candidatos, avaliador menor) e caminho em lote.

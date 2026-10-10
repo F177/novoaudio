@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from packages.ptbr.syllables import count_syllables
@@ -47,7 +48,8 @@ Aproveite as alavancas do português falado sempre que fizer sentido: pro-drop (
 quando óbvio), voz ativa em vez de passiva, contrações do registro falado ("tá", "pra", "cê", \
 "tô", "né"). Não use abreviação de chat/internet em nenhum candidato (ex.: "vc", "pq", "q", \
 "tb", "tbm", "blz") — escreva essas palavras por extenso; só as contrações de fala citadas \
-acima são permitidas.
+acima são permitidas. Escreva tudo em português, só com o alfabeto latino — nunca troque \
+de idioma no meio da frase nem use caracteres chineses ou de outro alfabeto.
 
 Preserve a pontuação de ênfase do original ("!", "?", "...") — se a frase original exclama ou \
 pergunta, o candidato traduzido deve exclamar ou perguntar também, não virar uma afirmação \
@@ -294,8 +296,39 @@ def parse_candidates(llm_response: str) -> list[str]:
                 f"candidato começa com resíduo de estrutura de lista/JSON "
                 f"(colchete ou aspas): {c!r:.80} — resposta do LLM corrompida"
             )
+        # Achado real (NFL seg0022, "but evidently"): o Qwen trocou de idioma
+        # no meio da frase ("Ele foi derrubado, mas显而易见") nos 5 candidatos.
+        # Descarta só o candidato contaminado; se nenhum sobrar, o retry tenta
+        # de novo — nunca deixa outro alfabeto chegar no MOSS-TTS.
+        if has_foreign_script(c):
+            continue
         result.append(c)
+    if not result:
+        raise ValueError(
+            "todos os candidatos têm letras fora do alfabeto latino (troca de "
+            "idioma do LLM no meio da frase)"
+        )
     return result
+
+
+_LATIN_EXTRA_LETTERS = {"ª", "º"}
+
+
+def has_foreign_script(text: str) -> bool:
+    """Alguma letra fora do alfabeto latino (ª/º contam como latinas).
+
+    Usada em dois pontos: aqui, pra descartar candidato contaminado, e em
+    `pod_worker.cmd_translate`, pra listar os tokens do vocabulário do Qwen
+    que nunca podem ser gerados (`suppress_tokens`) — só o filtro depois da
+    geração não bastava: no NFL seg0022 os 3 retries × 5 candidatos vazaram
+    chinês, mesmo com instrução explícita no prompt.
+    """
+    return any(
+        ch.isalpha()
+        and ch not in _LATIN_EXTRA_LETTERS
+        and not unicodedata.name(ch, "").startswith("LATIN")
+        for ch in text
+    )
 
 
 @dataclass

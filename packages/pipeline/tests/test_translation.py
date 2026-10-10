@@ -199,6 +199,27 @@ def test_parse_candidates_raises_on_unclosed_json() -> None:
         parse_candidates('{"candidates": ["Oi.", "trunc')
 
 
+def test_parse_candidates_drops_candidate_that_switches_to_chinese() -> None:
+    # Achado real (NFL seg0022): "Ele foi derrubado, mas显而易见".
+    response = json.dumps(
+        {"candidates": ["Ele foi derrubado, mas显而易见", "Ele caiu, mas claramente não."]},
+        ensure_ascii=False,
+    )
+    assert parse_candidates(response) == ["Ele caiu, mas claramente não."]
+
+
+def test_parse_candidates_raises_when_every_candidate_has_foreign_script() -> None:
+    response = json.dumps({"candidates": ["mas显而易见", "Привет"]}, ensure_ascii=False)
+    with pytest.raises(ValueError, match="alfabeto latino"):
+        parse_candidates(response)
+
+
+def test_parse_candidates_keeps_portuguese_accents_and_ordinals() -> None:
+    text = "Ação, coração, pé, à, você, ü, 1º lugar e 2ª vez."
+    response = json.dumps({"candidates": [text]}, ensure_ascii=False)
+    assert parse_candidates(response) == [text]
+
+
 def test_score_candidate_prefers_matching_budget() -> None:
     exact = score_candidate(
         "Uma frase com doze silabas mais ou menos aqui", target_syllables=12, source_text=""

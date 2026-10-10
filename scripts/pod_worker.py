@@ -165,6 +165,7 @@ def cmd_translate(args: argparse.Namespace) -> None:
     from packages.pipeline.translation import (
         N_CANDIDATES,
         build_prompt,
+        has_foreign_script,
         parse_candidates,
         rank_candidates,
     )
@@ -182,6 +183,20 @@ def cmd_translate(args: argparse.Namespace) -> None:
     model = AutoModelForCausalLM.from_pretrained(
         model_id, torch_dtype=torch.bfloat16, device_map=device
     )
+
+    # Achado real (NFL seg0022, "but evidently"): o Qwen troca pro chinês
+    # no meio da frase de forma sistemática pra certas entradas — 3 retries
+    # × 5 candidatos, todos contaminados, mesmo com instrução no prompt.
+    # Proibir na fonte: nenhum token cujo texto tenha letra fora do
+    # alfabeto latino pode ser gerado. Tokens de byte parcial (decodificam
+    # como U+FFFD) ficam liberados de propósito — o português também monta
+    # acentos a partir deles; `parse_candidates` segue como rede de
+    # segurança pro caso raro de um caractere estrangeiro montado por bytes.
+    suppressed_token_ids = [
+        token_id
+        for token_id in range(len(tokenizer))
+        if has_foreign_script(tokenizer.decode([token_id]))
+    ]
 
     # Achado real 2026-09-18 (pedido explícito do usuário: reduzir tempo de
     # ponta a ponta sem perder qualidade): `cmd_translate` fazia 1 chamada
@@ -227,7 +242,13 @@ def cmd_translate(args: argparse.Namespace) -> None:
     def generate_batch(batch_jobs: list[dict]) -> list[str]:
         texts = [build_prompt_text(job) for job in batch_jobs]
         inputs = tokenizer(texts, return_tensors="pt", padding=True).to(device)
-        outputs = model.generate(**inputs, max_new_tokens=1024, do_sample=True, temperature=0.7)
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=1024,
+            do_sample=True,
+            temperature=0.7,
+            suppress_tokens=suppressed_token_ids,
+        )
         prompt_len = inputs["input_ids"].shape[1]
         return [
             tokenizer.decode(outputs[i][prompt_len:], skip_special_tokens=True)

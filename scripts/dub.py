@@ -530,6 +530,7 @@ def run_pipeline(
     emotion_match: bool = False,
     allow_timeline_overflow: bool = False,
     force_stage: str | None = None,
+    translator: str = "llm",
 ) -> dict[str, Any]:
     cache_dir.mkdir(parents=True, exist_ok=True)
     pod = PodConfig.from_env()
@@ -693,6 +694,7 @@ def run_pipeline(
             ],
             "preserve_terms": preserve_terms,
             "target_language": TARGET_LANGUAGE,
+            "engine": translator,
         }
         for w, (context, window) in enumerate(build_windows(lines))
     ]
@@ -1337,6 +1339,12 @@ def main() -> None:
             "síntese, T0.26), sem fingir que o corte não aconteceu."
         ),
     )
+    parser.add_argument(
+        "--translator",
+        choices=("llm", "opus", "opus+llm"),
+        default="llm",
+        help="motor de tradução (benchmark 2026-10-10): Qwen, OPUS-MT, ou OPUS + Qwen pra encurtar",
+    )
     args = parser.parse_args()
 
     if not args.video and not args.r2_key:
@@ -1354,7 +1362,9 @@ def main() -> None:
         video_path = args.video
         cache_dir = args.cache_dir or Path(".cache/dub") / video_path.stem
 
-    out_path = args.out or video_path.with_name(f"{video_path.stem}.dub{video_path.suffix}")
+    # Vídeo gerado fora da pasta dos originais, que estava virando bagunça.
+    out_path = args.out or Path("videos/dublados") / f"{video_path.stem}.dub{video_path.suffix}"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     report = run_pipeline(
         video_path,
@@ -1368,6 +1378,7 @@ def main() -> None:
         emotion_match=args.emotion_match,
         allow_timeline_overflow=args.allow_timeline_overflow,
         force_stage=args.force_stage,
+        translator=args.translator,
     )
     transcript_path, translation_path = save_transcript_and_translation(
         report, cache_dir, Path(report["output"])

@@ -10,15 +10,21 @@ from packages.pipeline.translation import (
     build_shorten_prompt,
     build_window_prompt,
     build_windows,
+    choose_alternatives,
     choose_shortened,
+    contracted,
     extract_proper_nouns,
     has_disallowed_script,
     has_forbidden_word,
+    mt_options,
     parse_candidates,
     parse_window_response,
     profanity_count,
     rank_candidates,
     score_candidate,
+    sentence_groups,
+    split_by_source,
+    split_sentences,
     split_window,
 )
 
@@ -442,4 +448,71 @@ def test_shorten_prompt_shows_neighbors_and_keeps_sentence_edges() -> None:
 def test_shorten_prompt_without_neighbors_says_none() -> None:
     prompt = build_shorten_prompt("Hi.", "Oi, tudo bem com você?", 3, PT_BR)
     assert '- before: "(none)"' in prompt and '- after: "(none)"' in prompt
+
+
+def test_sentence_groups_join_cut_sentences() -> None:
+    texts = ["How much debt?", "Here you", "go. I gotta talk", "to this.", "Hi."]
+    assert sentence_groups(texts) == [[0], [1, 2, 3], [4]]
+
+
+def test_split_sentences() -> None:
+    assert split_sentences("Hi. Who said that? Me!") == ["Hi.", "Who said that?", "Me!"]
+
+
+def test_contracted_keeps_capital_and_verb_para() -> None:
+    assert contracted("Está bom, você vai para casa.", PT_BR) == "Tá bom, cê vai pra casa."
+    assert contracted("Para!", PT_BR) == "Para!"
+    assert contracted("Eu estou indo para o carro.", PT_BR) == "Eu tô indo pro carro."
+
+
+def test_choose_alternatives_keeps_best_when_it_fits() -> None:
+    options = [[("uma frase longa", 0.0), ("curta", -0.1)]]
+    assert choose_alternatives(options, 100, len) == ["uma frase longa"]
+
+
+def test_choose_alternatives_shortens_only_within_score_drop() -> None:
+    options = [
+        [("aaaaaaaaaa", -0.1), ("aaaaa", -0.2)],
+        [("bbbbbbbbbb", -0.1), ("b", -0.9)],  # curta, mas nota ruim demais
+    ]
+    assert choose_alternatives(options, 15, len, max_drop=0.25) == ["aaaaa", "bbbbbbbbbb"]
+
+
+def test_split_by_source_follows_source_proportion() -> None:
+    parts = split_by_source(
+        "Aqui está. Preciso falar com isso.", ["Here you", "go. I gotta talk to this."]
+    )
+    assert len(parts) == 2 and all(parts)
+    assert " ".join(parts) == "Aqui está. Preciso falar com isso."
+    assert parts[0].startswith("Aqui")
+
+
+def test_mt_options_moves_pronoun_and_drops_pt_pt() -> None:
+    # Caso real do OPUS-MT: "mande-me", "tiveres" (pt-PT) no meio do n-best.
+    options = mt_options(
+        [
+            ("Se tiveres um problema, manda-me uma mensagem.", -0.4),
+            ("Se você tiver um problema, mande-me uma mensagem.", -0.5),
+        ],
+        PT_BR,
+    )
+    assert options[0] == ("Se você tiver um problema, me mande uma mensagem.", -0.5)
+    assert all("tiveres" not in text for text, _ in options)
+    assert ("Se cê tiver um problema, me mande uma mensagem.", -0.5) in options
+
+
+def test_mt_options_keeps_capital_when_moving_pronoun() -> None:
+    assert mt_options([("Mande-me o número.", -0.1)], PT_BR)[0][0] == "Me mande o número."
+
+
+def test_mt_options_keeps_wrong_variant_when_nothing_else() -> None:
+    assert mt_options([("Vais ver.", -0.1)], PT_BR)[0][0] == "Vais ver."
+
+
+def test_mt_options_never_drops_profanity() -> None:
+    options = mt_options(
+        [("Seus gastos de merda foram milhares.", -0.5), ("Seus gastos foram milhares.", -0.6)],
+        PT_BR,
+    )
+    assert all("merda" in text for text, _ in options)
 

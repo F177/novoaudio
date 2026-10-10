@@ -71,6 +71,17 @@ class TargetLanguage:
     # Radicais de palavrão: encurtar nunca pode reduzir a contagem (decisão
     # de 2026-10-10: palavrão sai como no original, sem suavizar).
     profanity_stems: tuple[str, ...]
+    # Tradutor dedicado (OPUS-MT, Marian) e o prefixo de idioma que ele pede.
+    mt_model: str = ""
+    mt_prefix: str = ""
+    # Contrações da fala, (regex, troca): só entram como alternativa mais
+    # curta, nunca na tradução que já cabe.
+    contractions: tuple[tuple[str, str], ...] = ()
+    # Reescritas sempre aplicadas à saída do tradutor, (regex, troca).
+    mt_rewrites: tuple[tuple[str, str], ...] = ()
+    # Formas de outra variante do idioma (pt-PT pra pt-BR): a alternativa
+    # que tem uma delas sai, se sobrar alguma sem.
+    mt_avoid: tuple[str, ...] = ()
 
 
 PT_BR = TargetLanguage(
@@ -118,6 +129,31 @@ PT_BR = TargetLanguage(
         ),
     ),
     forbidden_words=frozenset({"vc", "vcs", "q", "pq", "tb", "tbm", "blz", "msg", "aprox"}),
+    mt_model="Helsinki-NLP/opus-mt-tc-big-en-pt",
+    mt_prefix=">>pob<< ",  # pob = pt-BR; ">>por<<" sai pt-PT
+    # Achado real: o OPUS-MT mistura pt-PT ("mande-me", "tiveres", "Vais",
+    # "está bem") no meio das alternativas pt-BR.
+    mt_rewrites=((r"\b(\w+)-(me|te|nos|lhe|lhes)\b", r"\2 \1"),),
+    mt_avoid=(
+        r"\btu\b",
+        r"\b(vais|estás|tens|podes|queres|sabes|tiveres|fazes|dizes|és|connosco)\b",
+        r"\bestá bem\b",
+        r"\bestou\?",  # "Hello?" ao telefone em pt-PT
+        r"\b(estou|está|estás|estamos|estão|estava) a \w+r\b",
+        r"\b(autocarro|comboio|equipa|telemóvel|fixe|facto|miúd\w*|rapariga\w*)\b",
+    ),
+    contractions=(
+        (r"\bestou\b", "tô"),
+        (r"\bestá\b", "tá"),
+        (r"\bestava\b", "tava"),
+        (r"\bestão\b", "tão"),
+        (r"\bestamos\b", "tamos"),
+        # "para" verbo ("Para!") fica: só a preposição antes de outra palavra.
+        # ponytail: "ele para o carro" vira "pra"; raro, aceito.
+        (r"\bpara o\b", "pro"),
+        (r"\bpara\b(?=\s+\w)", "pra"),
+        (r"\bvocê\b", "cê"),
+    ),
     profanity_stems=(
         "porra", "merda", "caralh", "foda", "fod", "puta", "puto", "cacete", "bosta",
         "cuzão", "arrombad", "desgraç", "viad", "babaca",
@@ -695,3 +731,129 @@ def _expressiveness_score(source_text: str, candidate_text: str) -> float:
     `docs/moss_tts_investigation.md`.
     """
     return 1.0 if _emphasis_signature(source_text) == _emphasis_signature(candidate_text) else 0.0
+
+
+# --- Tradutor dedicado (OPUS-MT) -------------------------------------------
+# Alternativa ao LLM em teste (2026-10-10): um modelo só de tradução, pequeno
+# (roda em CPU), devolve várias traduções por frase (n-best do beam search) e
+# a escolha da mais curta que cabe é feita aqui, sem gerar texto novo.
+
+# Queda máxima na log-prob média por token (nota do beam) pra uma alternativa
+# mais curta ainda valer. Ponto de partida não calibrado.
+MT_MAX_SCORE_DROP = 0.25
+# Alternativas por frase (beam search, n-best).
+MT_BEAMS = 8
+
+_TERMINAL = re.compile(r"[.!?…][\"')\]]*$")
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
+
+
+def sentence_groups(texts: list[str]) -> list[list[int]]:
+    """Índices de falas consecutivas que formam frases inteiras: uma fala que
+    não termina em pontuação final continua na próxima ("Here you" + "go.").
+    O tradutor vê a frase inteira, nunca o pedaço."""
+    groups: list[list[int]] = []
+    for i in range(len(texts)):
+        if groups and not _TERMINAL.search(texts[i - 1].strip()):
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    return groups
+
+
+def split_sentences(text: str) -> list[str]:
+    return [s for s in _SENTENCE_END.split(text.strip()) if s]
+
+
+def contracted(text: str, language: TargetLanguage) -> str:
+    def keep_case(match: re.Match[str], repl: str) -> str:
+        return repl[:1].upper() + repl[1:] if match.group(0)[:1].isupper() else repl
+
+    for pattern, repl in language.contractions:
+        text = re.sub(pattern, lambda m, r=repl: keep_case(m, r), text, flags=re.IGNORECASE)
+    return text
+
+
+def mt_options(
+    alternatives: list[tuple[str, float]], language: TargetLanguage
+) -> list[tuple[str, float]]:
+    """Alternativas do tradutor (melhor primeiro) prontas pra escolha:
+    reescritas do idioma aplicadas, variante errada descartada (se sobrar
+    alguma certa) e a versão contraída de cada uma, com a mesma nota."""
+
+    def rewrite(text: str) -> str:
+        for pattern, repl in language.mt_rewrites:
+            text = re.sub(
+                pattern,
+                lambda m, r=repl: (
+                    m.expand(r).capitalize() if m.group(0)[:1].isupper() else m.expand(r)
+                ),
+                text,
+                flags=re.IGNORECASE,
+            )
+        return text
+
+    alts = [(rewrite(text), score) for text, score in alternatives]
+    clean = [
+        a for a in alts if not any(re.search(p, a[0], re.IGNORECASE) for p in language.mt_avoid)
+    ]
+    alts = clean or alts
+    # Palavrão sai como no original (decisão de 2026-10-10). Caso real: a
+    # alternativa mais curta de "Her bullshit spending" era "Seus gastos".
+    swearing = max(profanity_count(text, language) for text, _ in alts)
+    alts = [a for a in alts if profanity_count(a[0], language) >= swearing]
+    alts += [(contracted(text, language), score) for text, score in alts]
+    return list(dict.fromkeys(alts))
+
+
+def choose_alternatives(
+    options: list[list[tuple[str, float]]],
+    budget: float,
+    count: Callable[[str], int],
+    *,
+    max_drop: float = MT_MAX_SCORE_DROP,
+) -> list[str]:
+    """Uma tradução por frase. `options[i]` são as alternativas da frase i,
+    `(texto, nota)`, a melhor primeiro. Começa da melhor de cada frase e,
+    enquanto o total de sílabas passar de `budget`, troca pela alternativa
+    que mais economiza sílaba por ponto de nota perdido — só entre as que
+    perdem no máximo `max_drop` de nota. Se nada mais serve, fica como está.
+    """
+    pick = [0] * len(options)
+    while sum(count(options[i][pick[i]][0]) for i in range(len(options))) > budget:
+        best: tuple[float, int, int] | None = None
+        for i, alts in enumerate(options):
+            top, now = alts[0][1], alts[pick[i]]
+            for j, (text, score) in enumerate(alts):
+                saved = count(now[0]) - count(text)
+                if saved <= 0 or top - score > max_drop:
+                    continue
+                gain = saved / (max(now[1] - score, 0.0) + 1e-3)
+                if best is None or gain > best[0]:
+                    best = (gain, i, j)
+        if best is None:
+            break
+        pick[best[1]] = best[2]
+    return [options[i][pick[i]][0] for i in range(len(options))]
+
+
+def split_by_source(translation: str, sources: list[str]) -> list[str]:
+    """Reparte a tradução de uma frase cortada entre as falas de origem, na
+    proporção de caracteres de cada pedaço do original, sempre em fronteira
+    de palavra. ponytail: proporção, não alinhamento de palavra; trocar por
+    alinhador se a divisão errar muito."""
+    words = translation.split()
+    if len(sources) == 1:
+        return [translation]
+    total = sum(len(s) for s in sources) or 1
+    parts, start, acc = [], 0, 0
+    for k, source in enumerate(sources[:-1]):
+        acc += len(source)
+        remaining = len(sources) - k - 1
+        cut = round(len(words) * acc / total)
+        cut = min(max(cut, start + 1), len(words) - remaining)
+        parts.append(" ".join(words[start:cut]))
+        start = cut
+    parts.append(" ".join(words[start:]))
+    return parts
+

@@ -261,7 +261,7 @@ def cmd_translate(args: argparse.Namespace) -> None:
             for (context, lines, failures), response in zip(chunk, responses, strict=True):
                 try:
                     translated.update(
-                        parse_window_response(response, [line.id for line in lines], language)
+                        parse_window_response(response, lines, language)
                     )
                     continue
                 except (ValueError, json.JSONDecodeError) as exc:

@@ -256,7 +256,8 @@ def test_parse_window_response_maps_ids_to_text() -> None:
         {"translations": [{"id": "seg0001", "text": "Toma."}, {"id": "seg0002", "text": "Vai!"}]},
         ensure_ascii=False,
     )
-    assert parse_window_response(response, ["seg0001", "seg0002"], PT_BR) == {
+    lines = [WindowLine("seg0001", "A", "Take it."), WindowLine("seg0002", "B", "Go!")]
+    assert parse_window_response(response, lines, PT_BR) == {
         "seg0001": "Toma.",
         "seg0002": "Vai!",
     }
@@ -264,7 +265,8 @@ def test_parse_window_response_maps_ids_to_text() -> None:
 
 def test_parse_window_response_tolerates_prose_around_json() -> None:
     response = 'Sure: {"translations": [{"id": "seg0001", "text": "Oi."}]} done.'
-    assert parse_window_response(response, ["seg0001"], PT_BR) == {"seg0001": "Oi."}
+    lines = [WindowLine("seg0001", "A", "Hi.")]
+    assert parse_window_response(response, lines, PT_BR) == {"seg0001": "Oi."}
 
 
 @pytest.mark.parametrize(
@@ -284,7 +286,9 @@ def test_parse_window_response_tolerates_prose_around_json() -> None:
 def test_parse_window_response_rejects_misaligned_or_bad_output(items) -> None:
     response = json.dumps({"translations": items}, ensure_ascii=False)
     with pytest.raises(ValueError):
-        parse_window_response(response, ["seg0001", "seg0002"], PT_BR)
+        parse_window_response(
+            response, [WindowLine("seg0001", "A", "Hi."), WindowLine("seg0002", "B", "Hi.")], PT_BR
+        )
 
 
 def test_language_rules_come_from_the_profile_not_the_shared_prompt() -> None:
@@ -296,6 +300,7 @@ def test_language_rules_come_from_the_profile_not_the_shared_prompt() -> None:
         scripts=("LATIN",),
         extra_letters=frozenset(),
         style_rules=("Use the polite form.",),
+        char_ratio_range=(0.5, 2.0),
     )
     prompt = build_window_prompt([WindowLine("seg0000", "A", "Hi.")], other)
     assert "Testlandish" in prompt and "Use the polite form." in prompt
@@ -304,7 +309,12 @@ def test_language_rules_come_from_the_profile_not_the_shared_prompt() -> None:
 
 def test_script_check_follows_the_target_language() -> None:
     cyrillic_target = TargetLanguage(
-        code="ru", name="Russian", scripts=("CYRILLIC",), extra_letters=frozenset(), style_rules=()
+        code="ru",
+        name="Russian",
+        scripts=("CYRILLIC",),
+        extra_letters=frozenset(),
+        style_rules=(),
+        char_ratio_range=(0.5, 2.0),
     )
     assert has_disallowed_script("Привет", PT_BR)
     assert not has_disallowed_script("Привет", cyrillic_target)
@@ -332,4 +342,23 @@ def test_split_window_down_to_single_lines_covers_everything() -> None:
         else:
             pending.extend(split_window(context, lines))
     assert sorted(singles) == [line.id for line in _lines(12)]
+
+
+def test_parse_window_response_rejects_content_shifted_between_lines() -> None:
+    # Caso real (Short do Jay Shetty): ids todos presentes, mas a primeira
+    # fala recebeu as frases das seguintes e a última ficou só com o rabo.
+    first = "Say that again, Jay. Weak people notice other people's mistakes"
+    last = (
+        "but they're seeing different things because no one is a weak or "
+        "strong person. It's just what you focus on."
+    )
+    lines = [WindowLine("seg0000", "A", first), WindowLine("seg0009", "A", last)]
+    response = json.dumps({"translations": [
+        {"id": "seg0000", "text": "Diga de novo, Jay. Pessoas fracas notam os erros dos outros e "
+         "riem. Pessoas fortes notam os erros dos outros e aprendem. E falam sobre os problemas "
+         "dos outros pra se sentirem melhor."},
+        {"id": "seg0009", "text": "É só o que você foca."},
+    ]}, ensure_ascii=False)
+    with pytest.raises(ValueError, match="tamanho"):
+        parse_window_response(response, lines, PT_BR)
 

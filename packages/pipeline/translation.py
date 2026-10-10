@@ -56,6 +56,9 @@ class TargetLanguage:
     scripts: tuple[str, ...]
     extra_letters: frozenset[str]
     style_rules: tuple[str, ...]
+    # Faixa aceitável de len(tradução)/len(original), em caracteres — muda
+    # muito por idioma (EN->pt fica perto de 1; EN->japonês bem abaixo).
+    char_ratio_range: tuple[float, float]
 
 
 PT_BR = TargetLanguage(
@@ -70,6 +73,8 @@ PT_BR = TargetLanguage(
         "words in full.",
         '"you" addressing one person is "você" or "cê"; addressing several people is "vocês".',
     ),
+    # Medido em 25 falas boas de 5 Shorts: 0,77–1,34. Margem larga de propósito.
+    char_ratio_range=(0.5, 1.8),
 )
 
 LANGUAGES: dict[str, TargetLanguage] = {PT_BR.code: PT_BR}
@@ -191,17 +196,29 @@ def build_window_prompt(
     )
 
 
+# Folga absoluta pra fala curta, onde a razão de caracteres é ruidosa.
+_RATIO_SLACK_CHARS = 12
+
+
 def parse_window_response(
-    llm_response: str, expected_ids: list[str], language: TargetLanguage
+    llm_response: str, lines: list[WindowLine], language: TargetLanguage
 ) -> dict[str, str]:
     """Extrai {id: tradução} e exige exatamente uma tradução por fala pedida.
 
     Qualquer desvio (id faltando, sobrando, texto vazio, resíduo de
-    estrutura, alfabeto que não é o do idioma) levanta `ValueError` — a
-    janela inteira é refeita, nunca aceita parcialmente: uma fala faltando
-    deixaria o segmento com o texto em inglês, e uma sobrando desalinharia
-    os ids.
+    estrutura, alfabeto que não é o do idioma, tamanho incompatível com o
+    original) levanta `ValueError` — a janela inteira é refeita, nunca
+    aceita parcialmente: uma fala faltando deixaria o segmento com o texto
+    em inglês, e uma sobrando desalinharia os ids.
+
+    O tamanho pega o pior caso real (Short do Jay Shetty, frases paralelas
+    cortadas no meio): todos os ids presentes, mas o conteúdo deslocado —
+    frases inteiras numa fala, repetidas na seguinte, e a última com só o
+    rabo. Razões de 3,07 e 0,20 contra 0,77–1,34 nas falas boas.
     """
+    expected_ids = [line.id for line in lines]
+    source_len = {line.id: len(line.text) for line in lines}
+    low, high = language.char_ratio_range
     data = json.loads(_extract_json_object(llm_response))
     items = data.get("translations")
     if not isinstance(items, list):
@@ -219,6 +236,13 @@ def parse_window_response(
             raise ValueError(f"texto com resíduo de estrutura JSON: {text!r:.80}")
         if has_disallowed_script(text, language):
             raise ValueError(f"texto fora do alfabeto de {language.code}: {text!r:.80}")
+        n_src, n_out = source_len.get(seg_id, 0), len(text.strip())
+        if n_src and not (low * n_src - _RATIO_SLACK_CHARS <= n_out
+                          <= high * n_src + _RATIO_SLACK_CHARS):
+            raise ValueError(
+                f"tamanho incompatível em {seg_id} ({n_out} vs {n_src} caracteres no "
+                "original): conteúdo provavelmente deslocado entre falas"
+            )
         result[seg_id] = text.strip()
     if set(result) != set(expected_ids):
         missing = sorted(set(expected_ids) - set(result))

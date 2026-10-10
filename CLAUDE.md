@@ -43,6 +43,8 @@ Fundador solo. Prioridade absoluta: **simplicidade operacional e custo baixo em 
 
 **Não introduza:** Kubernetes, Airflow, Temporal, Celery, RabbitMQ, Kafka, microserviços, GraphQL, ORM pesado além do SQLAlchemy Core, ou qualquer AWS service com taxa de egresso.
 
+**Geração 100% in-house (decisão de 2026-10-10):** nenhuma API externa nem ferramenta de terceiros no processo de geração (ASR, tradução, TTS, avaliação). Só modelos open-weight rodando na nossa própria GPU. Melhoria de qualidade vem de modelo self-hosted, estrutura do pipeline, pontuação interna ou fine-tune — nunca de provedor hospedado.
+
 ## Modelos de ML usados
 
 | Etapa | Modelo | Onde roda |

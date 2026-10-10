@@ -248,3 +248,52 @@ def test_rank_candidates_prefers_preserved_emphasis_when_budget_ties() -> None:
     candidates = ["Corre.", "Corre!"]
     ranked = rank_candidates(candidates, target_syllables=2, source_text="Run!")
     assert ranked[0].text == "Corre!"
+
+
+def test_score_candidate_continuation_does_not_penalize_going_over_budget() -> None:
+    # T0.23+ achado real: pra fragmento de frase cortada, um candidato mais
+    # longo que o orçamento (preservando conteúdo) não deve perder pontos
+    # de orçamento — o sistema comprime áudio depois, mas não recupera
+    # conteúdo que a tradução já cortou.
+    over_budget = score_candidate(
+        "Uma frase bem mais longa do que os quatro silabas pedidas mas completa",
+        target_syllables=4,
+        source_text="",
+        is_continuation=True,
+    )
+    assert over_budget.budget_score == 1.0
+
+
+def test_score_candidate_continuation_still_penalizes_going_under_budget() -> None:
+    # Só o lado "mais longo" é perdoado — ficar mais CURTO que o orçamento
+    # ainda é penalizado (pode ser sinal de conteúdo cortado de outro jeito).
+    under_budget = score_candidate("Oi", target_syllables=12, source_text="", is_continuation=True)
+    assert under_budget.budget_score < 1.0
+
+
+def test_score_candidate_non_continuation_keeps_symmetric_penalty() -> None:
+    # Sem is_continuation (default), comportamento idêntico ao antigo —
+    # ficar mais longo que o orçamento ainda é penalizado normalmente.
+    over_budget = score_candidate(
+        "Uma frase bem mais longa do que os quatro silabas pedidas",
+        target_syllables=4,
+        source_text="",
+    )
+    assert over_budget.budget_score < 1.0
+
+
+def test_rank_candidates_continuation_prefers_complete_over_short() -> None:
+    # Cenário real (seg0010, vídeo padrão): candidato curto que bate o
+    # orçamento mas perdeu conteúdo ("for that") perdia pro completo antes
+    # da mudança de pontuação pra fragmentos. "Que isso" (3 sílabas, fica
+    # abaixo do orçamento) simula o candidato que cortou "for that"; "Pra
+    # isso, que isso" (6 sílabas, no orçamento) simula o que preservou.
+    short_incomplete = "Que isso"
+    long_complete = "Pra isso, que isso"
+    ranked = rank_candidates(
+        [short_incomplete, long_complete],
+        target_syllables=6,
+        source_text="",
+        is_continuation=True,
+    )
+    assert ranked[0].text == long_complete

@@ -258,7 +258,12 @@ def cmd_translate(args: argparse.Namespace) -> None:
     for job in jobs:
         candidates = candidates_by_id[job["id"]]
         ranked = (
-            rank_candidates(candidates, job["target_syllables"], job["source_text"])
+            rank_candidates(
+                candidates,
+                job["target_syllables"],
+                job["source_text"],
+                is_continuation=job.get("is_continuation", False),
+            )
             if candidates
             else []
         )

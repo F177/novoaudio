@@ -86,6 +86,12 @@ acima). Traduza TODO o conteúdo da frase original abaixo, palavra por palavra, 
 pareça incompleta sozinha — não corte nenhuma cláusula achando que ela já foi dita no \
 contexto, e não resuma. O contexto serve SÓ para resolver pronome ou referência ambígua \
 ("you", "it", "that", "her"), nunca para decidir o que omitir.
+
+Se o orçamento de sílabas abaixo for pequeno demais pra manter TODO esse conteúdo, gere \
+pelo menos um candidato mais longo que o orçamento, mas completo — não use o orçamento \
+como desculpa pra cortar parte da fala. Um candidato longo e fiel é melhor que um candidato \
+no tamanho certo que perdeu conteúdo: o sistema tem como comprimir áudio depois da síntese, \
+mas não tem como recuperar uma cláusula que a tradução já descartou.
 """
 
 _PRESERVE_BLOCK_TEMPLATE = """
@@ -311,9 +317,15 @@ _SPOKEN_MARKERS = ("tá", "pra", "né", " cê ", "tô", "vc")
 _EMPHASIS_CHARS = "!?"
 
 
-def score_candidate(text: str, target_syllables: int, source_text: str) -> ScoredCandidate:
+def score_candidate(
+    text: str, target_syllables: int, source_text: str, *, is_continuation: bool = False
+) -> ScoredCandidate:
     syllables = count_syllables(text)
-    budget_score = _budget_score(syllables, target_syllables)
+    budget_score = (
+        _budget_score_continuation(syllables, target_syllables)
+        if is_continuation
+        else _budget_score(syllables, target_syllables)
+    )
     naturalness_score = _naturalness_score(text)
     expressiveness_score = _expressiveness_score(source_text, text)
     score = (
@@ -332,15 +344,46 @@ def score_candidate(text: str, target_syllables: int, source_text: str) -> Score
 
 
 def rank_candidates(
-    candidates: list[str], target_syllables: int, source_text: str
+    candidates: list[str],
+    target_syllables: int,
+    source_text: str,
+    *,
+    is_continuation: bool = False,
 ) -> list[ScoredCandidate]:
     """Ordena os candidatos do melhor pro pior pela pontuação local.
 
     Não decide sozinho qual usar — só ordena. A escolha final no editor
     (T2.3) mostra os 5 com a contagem de sílabas, o humano troca com 1 clique.
     """
-    scored = [score_candidate(c, target_syllables, source_text) for c in candidates]
+    scored = [
+        score_candidate(c, target_syllables, source_text, is_continuation=is_continuation)
+        for c in candidates
+    ]
     return sorted(scored, key=lambda c: c.score, reverse=True)
+
+
+def _budget_score_continuation(syllables: int, target_syllables: int) -> float:
+    """Mesmo princípio de `_budget_score`, mas SÓ penaliza ficar mais CURTO
+    que o orçamento, nunca mais LONGO.
+
+    Achado real (vídeo padrão, 2026-10-09): pra fragmento de frase cortada
+    (`is_continuation`), um orçamento de sílabas apertado fazia os 5
+    candidatos gerados cortarem conteúdo pra caber (`_budget_score`
+    simétrico não distinguia "ficou mais longo pra manter tudo" de "ficou
+    mais longo por enrolação" — penalizava os dois igual). Sem essa
+    distinção, um candidato completo-mas-longo sempre perdia pro
+    candidato-curto-mas-incompleto na pontuação, mesmo com o prompt
+    pedindo pra priorizar completude. Fragmentos têm MOTIVO real pra \
+    passar do orçamento (preservar conteúdo); segmentos normais não — por
+    isso esta função só existe pro caso `is_continuation`, o resto do
+    pipeline continua com a penalidade simétrica de sempre.
+    """
+    if target_syllables <= 0:
+        return 0.0
+    if syllables >= target_syllables:
+        return 1.0
+    relative_error = (target_syllables - syllables) / target_syllables
+    return max(0.0, 1.0 - relative_error)
 
 
 def _budget_score(syllables: int, target_syllables: int) -> float:

@@ -6,12 +6,17 @@ from packages.pipeline.translation import (
     PT_BR,
     TargetLanguage,
     WindowLine,
+    build_judge_prompt,
+    build_shorten_prompt,
     build_window_prompt,
     build_windows,
+    choose_shortened,
     extract_proper_nouns,
     has_disallowed_script,
+    has_forbidden_word,
     parse_candidates,
     parse_window_response,
+    profanity_count,
     rank_candidates,
     score_candidate,
     split_window,
@@ -57,27 +62,27 @@ def test_extract_proper_nouns_dedupes_preserving_first_spelling() -> None:
 
 def test_parse_candidates_extracts_list() -> None:
     response = json.dumps({"candidates": ["Oi.", "Olá, tudo bem?"]})
-    assert parse_candidates(response) == ["Oi.", "Olá, tudo bem?"]
+    assert parse_candidates(response, PT_BR) == ["Oi.", "Olá, tudo bem?"]
 
 
 def test_parse_candidates_tolerates_markdown_wrapping() -> None:
     response = '```json\n{"candidates": ["Oi.", "Ola."]}\n```'
-    assert parse_candidates(response) == ["Oi.", "Ola."]
+    assert parse_candidates(response, PT_BR) == ["Oi.", "Ola."]
 
 
 def test_parse_candidates_tolerates_prose_before_and_after() -> None:
     response = 'Aqui estao as opcoes:\n{"candidates": ["Um.", "Dois."]}\nEspero que ajude!'
-    assert parse_candidates(response) == ["Um.", "Dois."]
+    assert parse_candidates(response, PT_BR) == ["Um.", "Dois."]
 
 
 def test_parse_candidates_raises_without_json() -> None:
     with pytest.raises(ValueError, match="JSON"):
-        parse_candidates("desculpa, nao consegui gerar candidatos")
+        parse_candidates("desculpa, nao consegui gerar candidatos", PT_BR)
 
 
 def test_parse_candidates_raises_without_candidates_key() -> None:
     with pytest.raises(ValueError, match="candidates"):
-        parse_candidates(json.dumps({"outra_coisa": []}))
+        parse_candidates(json.dumps({"outra_coisa": []}), PT_BR)
 
 
 def test_parse_candidates_unwraps_single_element_nested_list() -> None:
@@ -89,7 +94,7 @@ def test_parse_candidates_unwraps_single_element_nested_list() -> None:
     # pro MOSS-TTS sintetizar; rejeitar e torcer pelo retry desperdiçava
     # tentativas à toa quando o formato é conhecido e recuperável.
     response = json.dumps({"candidates": [["Oi, tudo bem?"], "Olá."]})
-    assert parse_candidates(response) == ["Oi, tudo bem?", "Olá."]
+    assert parse_candidates(response, PT_BR) == ["Oi, tudo bem?", "Olá."]
 
 
 def test_parse_candidates_raises_when_nested_list_is_not_recoverable() -> None:
@@ -97,7 +102,7 @@ def test_parse_candidates_raises_when_nested_list_is_not_recoverable() -> None:
     # exato conhecido, continua sendo rejeitado (não tenta adivinhar).
     response = json.dumps({"candidates": [["Oi.", "Tchau."], "Olá."]})
     with pytest.raises(ValueError, match="não é uma string"):
-        parse_candidates(response)
+        parse_candidates(response, PT_BR)
 
 
 def test_parse_candidates_raises_on_leftover_list_bracket_residue() -> None:
@@ -108,20 +113,20 @@ def test_parse_candidates_raises_on_leftover_list_bracket_residue() -> None:
     # DENTRO da string, sem jeito óbvio de limpar — rejeita pro retry.
     response = json.dumps({"candidates": ["['Alguma fala aqui", "Olá."]})
     with pytest.raises(ValueError, match="resíduo de estrutura"):
-        parse_candidates(response)
+        parse_candidates(response, PT_BR)
 
 
 def test_parse_candidates_raises_on_leading_quote_residue() -> None:
     response = json.dumps({"candidates": ["'Alguma fala", "Olá."]})
     with pytest.raises(ValueError, match="resíduo de estrutura"):
-        parse_candidates(response)
+        parse_candidates(response, PT_BR)
 
 
 def test_parse_candidates_allows_text_with_bracket_in_the_middle() -> None:
     # só o INÍCIO da string é suspeito — colchete/aspas no meio de uma
     # fala real (ex.: citação) não deve ser rejeitado
     response = json.dumps({"candidates": ["Ele disse 'oi' pra mim", "Olá."]})
-    assert parse_candidates(response) == ["Ele disse 'oi' pra mim", "Olá."]
+    assert parse_candidates(response, PT_BR) == ["Ele disse 'oi' pra mim", "Olá."]
 
 
 def test_parse_candidates_ignores_extra_braces_after_the_real_json() -> None:
@@ -134,12 +139,12 @@ def test_parse_candidates_ignores_extra_braces_after_the_real_json() -> None:
         '{"candidates": ["Oi.", "Ola."]}\n'
         'Nota: o formato de exemplo seria algo como {"candidates": ["exemplo"]}'
     )
-    assert parse_candidates(response) == ["Oi.", "Ola."]
+    assert parse_candidates(response, PT_BR) == ["Oi.", "Ola."]
 
 
 def test_parse_candidates_raises_on_unclosed_json() -> None:
     with pytest.raises(ValueError, match="incompleto"):
-        parse_candidates('{"candidates": ["Oi.", "trunc')
+        parse_candidates('{"candidates": ["Oi.", "trunc', PT_BR)
 
 
 def test_parse_candidates_drops_candidate_that_switches_to_chinese() -> None:
@@ -148,19 +153,19 @@ def test_parse_candidates_drops_candidate_that_switches_to_chinese() -> None:
         {"candidates": ["Ele foi derrubado, mas显而易见", "Ele caiu, mas claramente não."]},
         ensure_ascii=False,
     )
-    assert parse_candidates(response) == ["Ele caiu, mas claramente não."]
+    assert parse_candidates(response, PT_BR) == ["Ele caiu, mas claramente não."]
 
 
 def test_parse_candidates_raises_when_every_candidate_has_foreign_script() -> None:
     response = json.dumps({"candidates": ["mas显而易见", "Привет"]}, ensure_ascii=False)
     with pytest.raises(ValueError, match="alfabeto latino"):
-        parse_candidates(response)
+        parse_candidates(response, PT_BR)
 
 
 def test_parse_candidates_keeps_portuguese_accents_and_ordinals() -> None:
     text = "Ação, coração, pé, à, você, ü, 1º lugar e 2ª vez."
     response = json.dumps({"candidates": [text]}, ensure_ascii=False)
-    assert parse_candidates(response) == [text]
+    assert parse_candidates(response, PT_BR) == [text]
 
 
 def test_score_candidate_prefers_matching_budget() -> None:
@@ -301,6 +306,10 @@ def test_language_rules_come_from_the_profile_not_the_shared_prompt() -> None:
         extra_letters=frozenset(),
         style_rules=("Use the polite form.",),
         char_ratio_range=(0.5, 2.0),
+        count_syllables=len,
+        compression_examples=(),
+        forbidden_words=frozenset(),
+        profanity_stems=(),
     )
     prompt = build_window_prompt([WindowLine("seg0000", "A", "Hi.")], other)
     assert "Testlandish" in prompt and "Use the polite form." in prompt
@@ -315,6 +324,10 @@ def test_script_check_follows_the_target_language() -> None:
         extra_letters=frozenset(),
         style_rules=(),
         char_ratio_range=(0.5, 2.0),
+        count_syllables=len,
+        compression_examples=(),
+        forbidden_words=frozenset(),
+        profanity_stems=(),
     )
     assert has_disallowed_script("Привет", PT_BR)
     assert not has_disallowed_script("Привет", cyrillic_target)
@@ -361,4 +374,54 @@ def test_parse_window_response_rejects_content_shifted_between_lines() -> None:
     ]}, ensure_ascii=False)
     with pytest.raises(ValueError, match="tamanho"):
         parse_window_response(response, lines, PT_BR)
+
+
+def test_shorten_prompt_carries_target_examples_and_keep_content_rule() -> None:
+    prompt = build_shorten_prompt(
+        "I don't even know how to make the payment.",
+        "Eu nem sei como é que eu vou fazer o pagamento.",
+        8,
+        PT_BR,
+    )
+    assert "about 8 syllables" in prompt and "ALL that the English original says" in prompt
+    assert "profanity" in prompt and "never telegraphic" in prompt
+    assert "Brazilian Portuguese" in prompt
+
+
+def test_choose_shortened_picks_most_faithful_shorter_candidate() -> None:
+    options = [
+        ("curto mas sem sentido", 4, 0.30),
+        ("curto e fiel", 6, 0.93),
+        ("mais fiel porém mais longo", 12, 0.97),
+        ("um pouco menos fiel", 5, 0.90),
+    ]
+    assert choose_shortened(10, 4, options) == "curto e fiel"
+
+
+def test_choose_shortened_returns_none_when_nothing_helps() -> None:
+    assert choose_shortened(10, 4, [("igual", 10, 0.99), ("perdeu sentido", 5, 0.2)]) is None
+
+
+def test_choose_shortened_never_cuts_below_the_floor() -> None:
+    # Caso real: 11 sílabas escolhidas pra um alvo de 27 — o sentido foi junto.
+    options = [("cortou demais", 11, 0.95), ("no alvo", 24, 0.90)]
+    assert choose_shortened(45, 21, options) == "no alvo"
+
+
+def test_has_forbidden_word_matches_whole_words_only() -> None:
+    assert has_forbidden_word("Se tiver problema, manda msg.", PT_BR)
+    assert has_forbidden_word("Aqui vcs.", PT_BR)
+    assert not has_forbidden_word("Que mensagem bonita, quase.", PT_BR)
+
+
+def test_judge_prompt_asks_yes_no_on_meaning_and_naturalness() -> None:
+    prompt = build_judge_prompt("What do you mean?", "Quer dizer?", PT_BR)
+    assert "What do you mean?" in prompt and "Quer dizer?" in prompt
+    assert "Brazilian Portuguese" in prompt and "Answer only YES or NO" in prompt
+
+
+def test_profanity_count_catches_inflections() -> None:
+    # Caso real: o encurtamento trocou "Sua merda de gastos" por "Seus gastos".
+    assert profanity_count("Sua merda de gastos, porra, que fodido.", PT_BR) == 3
+    assert profanity_count("Seus gastos sozinhos no mês passado.", PT_BR) == 0
 

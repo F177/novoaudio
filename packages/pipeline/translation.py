@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from packages.ptbr.syllables import count_syllables
@@ -59,6 +60,17 @@ class TargetLanguage:
     # Faixa aceitável de len(tradução)/len(original), em caracteres — muda
     # muito por idioma (EN->pt fica perto de 1; EN->japonês bem abaixo).
     char_ratio_range: tuple[float, float]
+    count_syllables: Callable[[str], int]
+    # Pares (fala longa, fala encurtada) no idioma de destino, usados como
+    # exemplo no prompt de encurtar. Achado publicado (isometric MT por
+    # prompting, 2025): exemplos do MESMO tamanho fazem o modelo ignorar o
+    # limite; só exemplos fortemente comprimidos funcionam.
+    compression_examples: tuple[tuple[str, str], ...]
+    # Palavras que nunca podem sair numa fala (abreviação de chat etc.).
+    forbidden_words: frozenset[str]
+    # Radicais de palavrão: encurtar nunca pode reduzir a contagem (decisão
+    # de 2026-10-10: palavrão sai como no original, sem suavizar).
+    profanity_stems: tuple[str, ...]
 
 
 PT_BR = TargetLanguage(
@@ -75,6 +87,37 @@ PT_BR = TargetLanguage(
     ),
     # Medido em 25 falas boas de 5 Shorts: 0,77–1,34. Margem larga de propósito.
     char_ratio_range=(0.5, 1.8),
+    count_syllables=count_syllables,
+    # Compressão moderada e natural (~30%), frase completa, nada telegráfico.
+    # Achado real: exemplos extremos (corte de 60%+) faziam o modelo cortar
+    # sentido e virar telegrama ("Você falando?", "só foco.").
+    compression_examples=(
+        (
+            "Eu sinceramente não sei nem como é que eu vou fazer o pagamento disso.",
+            "Sinceramente, nem sei como vou pagar isso.",
+        ),
+        (
+            "Você está me dizendo que ela gastou milhares de dólares só no mês passado?",
+            "Cê tá dizendo que ela gastou milhares só no mês passado?",
+        ),
+        (
+            "Quando você entra naquela sala, você está relaxado, você não está nervoso.",
+            "Quando entra na sala, você tá relaxado, não tá nervoso.",
+        ),
+        (
+            "Eu tenho que conversar com esse cara agora mesmo, porra.",
+            "Tenho que falar com esse cara agora, porra.",
+        ),
+        (
+            "Isso é exatamente a coisa que eu estava tentando te dizer o tempo todo.",
+            "É exatamente isso que eu tava tentando te dizer.",
+        ),
+    ),
+    forbidden_words=frozenset({"vc", "vcs", "q", "pq", "tb", "tbm", "blz", "msg", "aprox"}),
+    profanity_stems=(
+        "porra", "merda", "caralh", "foda", "fod", "puta", "puto", "cacete", "bosta",
+        "cuzão", "arrombad", "desgraç", "viad", "babaca",
+    ),
 )
 
 LANGUAGES: dict[str, TargetLanguage] = {PT_BR.code: PT_BR}
@@ -253,6 +296,105 @@ def parse_window_response(
     return result
 
 
+# Uma rodada só. Achado real: a 2ª e a 3ª rodada encurtavam o que já tinha
+# sido encurtado e o juiz deixava passar ("Quanto déb cê tem?", "Qual é,
+# cê?"). O que ainda passar do orçamento fica pra compressão da síntese.
+SHORTEN_ROUNDS = 1
+SHORTEN_CANDIDATES = 3
+# Probabilidade mínima de "YES" do juiz (o próprio LLM) pra aceitar uma
+# versão encurtada. Achado real: similaridade de embedding (e5-small) dava
+# 0,89–0,99 pra tudo, inclusive cortes que mudaram o sentido ("Quer
+# dizer?", "Quanto endivida?") — não separava nada. Ponto de partida não
+# calibrado — calibrar contra os rótulos da T0.28.
+SHORTEN_MIN_FIDELITY = 0.5
+
+JUDGE_PROMPT_TEMPLATE = """English original: "{source}"
+{language} dubbing line: "{candidate}"
+
+Does the {language} line say everything the English original says (nothing important missing, \
+nothing changed or added), and is it natural, grammatical {language} that a native speaker would \
+actually say? Answer only YES or NO."""
+
+
+def build_judge_prompt(source: str, candidate: str, language: TargetLanguage) -> str:
+    return JUDGE_PROMPT_TEMPLATE.format(source=source, candidate=candidate, language=language.name)
+
+# T0.30, passo 2 (método DT, ESTsoft, EMNLP 2025): primeiro a tradução fiel,
+# depois encurtar só a fala que passa do orçamento. Pedir fidelidade e
+# tamanho no mesmo prompt fazia o modelo cortar conteúdo; separado, o corte
+# vira escolha explícita entre candidatos, julgada contra a versão fiel.
+SHORTEN_PROMPT_TEMPLATE = """Shorten this {language} dubbing line only as much as needed to \
+fit about {target} syllables (it has {current} now) — not shorter than that. It must still say ALL \
+that the English original says, with the same tone, slang, profanity level and emphasis \
+punctuation. Cut filler, repetition and redundant words first; prefer short spoken forms. The \
+result must be a natural, complete, grammatical line a native speaker would say — never \
+telegraphic, never abbreviations. Do not add anything.
+{language_rules}
+Examples of good shortening:
+{examples}
+English original: "{source}"
+Current {language} line: "{current_text}"
+
+Give {n} different shorter versions. Reply ONLY with JSON, no markdown: \
+{{"candidates": ["...", "...", "..."]}}"""
+
+
+def build_shorten_prompt(
+    source: str,
+    current_text: str,
+    target_syllables: int,
+    language: TargetLanguage,
+    *,
+    n: int = SHORTEN_CANDIDATES,
+) -> str:
+    return SHORTEN_PROMPT_TEMPLATE.format(
+        language=language.name,
+        target=target_syllables,
+        current=language.count_syllables(current_text),
+        language_rules="".join(f"- {rule}\n" for rule in language.style_rules),
+        examples="".join(
+            f'- "{long}" -> "{short}"\n' for long, short in language.compression_examples
+        ),
+        source=source,
+        current_text=current_text,
+        n=n,
+    )
+
+
+def profanity_count(text: str, language: TargetLanguage) -> int:
+    return sum(
+        word.startswith(language.profanity_stems) for word in re.findall(r"\w+", text.lower())
+    )
+
+
+def has_forbidden_word(text: str, language: TargetLanguage) -> bool:
+    return any(w in language.forbidden_words for w in re.findall(r"\w+", text.lower()))
+
+
+def choose_shortened(
+    current_syllables: int,
+    min_syllables: int,
+    options: list[tuple[str, int, float]],
+    *,
+    min_fidelity: float = SHORTEN_MIN_FIDELITY,
+) -> str | None:
+    """Entre `(texto, sílabas, nota de fidelidade do juiz)`, o candidato
+    mais fiel que ficou mais curto sem passar do piso `min_syllables`;
+    `None` se nenhum serve (aí a fala fica como está e sai da fila).
+
+    O piso existe porque, sem ele, a escolha aceitava cortes muito além do
+    necessário (11 sílabas pra um alvo de 27) e o sentido ia junto.
+    """
+    usable = [
+        o
+        for o in options
+        if min_syllables <= o[1] < current_syllables and o[2] >= min_fidelity
+    ]
+    if not usable:
+        return None
+    return max(usable, key=lambda o: (o[2], -o[1]))[0]
+
+
 # T0.23: palavras capitalizadas comuns em início de frase no inglês falado de
 # trailer/vídeo — sem essa lista, a regra "sentence-initial repetido em >=2
 # segmentos" (ver `extract_proper_nouns`) falsamente marcaria "The"/"Now"/"I"
@@ -366,7 +508,7 @@ def _extract_json_object(text: str) -> str:
     raise ValueError("resposta do LLM tem um objeto JSON incompleto (chave não fechada)")
 
 
-def parse_candidates(llm_response: str) -> list[str]:
+def parse_candidates(llm_response: str, language: TargetLanguage) -> list[str]:
     """Extrai a lista de candidatos do JSON devolvido pelo LLM (tolera markdown ao redor).
 
     Achado real 2026-09-18 (beast.mp4): pra segmentos maiores (depois do
@@ -418,7 +560,7 @@ def parse_candidates(llm_response: str) -> list[str]:
         # no meio da frase ("Ele foi derrubado, mas显而易见") nos 5 candidatos.
         # Descarta só o candidato contaminado; se nenhum sobrar, o retry tenta
         # de novo — nunca deixa outro alfabeto chegar no MOSS-TTS.
-        if has_disallowed_script(c, PT_BR):
+        if has_disallowed_script(c, language):
             continue
         result.append(c)
     if not result:

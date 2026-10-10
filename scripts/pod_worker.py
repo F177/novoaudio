@@ -165,12 +165,20 @@ def cmd_translate(args: argparse.Namespace) -> None:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    from packages.pipeline.budget import TOLERANCE_OFF_SCREEN
     from packages.pipeline.translation import (
         LANGUAGES,
+        SHORTEN_ROUNDS,
         WindowLine,
+        build_judge_prompt,
+        build_shorten_prompt,
         build_window_prompt,
+        choose_shortened,
         has_disallowed_script,
+        has_forbidden_word,
+        parse_candidates,
         parse_window_response,
+        profanity_count,
         score_candidate,
         split_window,
     )
@@ -223,18 +231,20 @@ def cmd_translate(args: argparse.Namespace) -> None:
     target_syllables = {line["id"]: line["target_syllables"] for j in jobs for line in j["lines"]}
     source_text = {line["id"]: line["text"] for j in jobs for line in j["lines"]}
 
-    def prompt_text(window: tuple[list[WindowLine], list[WindowLine]]) -> str:
-        context, lines = window
-        prompt = build_window_prompt(
-            lines, language, context_before=context, preserve_terms=preserve_terms
-        )
+    def chat(prompt: str) -> str:
         messages = [{"role": "user", "content": prompt}]
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-    def generate_batch(windows: list) -> list[str]:
-        inputs = tokenizer(
-            [prompt_text(window) for window in windows], return_tensors="pt", padding=True
-        ).to(device)
+    def window_prompt(window: tuple[list[WindowLine], list[WindowLine]]) -> str:
+        context, lines = window
+        return chat(
+            build_window_prompt(
+                lines, language, context_before=context, preserve_terms=preserve_terms
+            )
+        )
+
+    def generate_batch(prompts: list[str]) -> list[str]:
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
         outputs = model.generate(
             **inputs,
             max_new_tokens=2048,
@@ -245,7 +255,7 @@ def cmd_translate(args: argparse.Namespace) -> None:
         prompt_len = inputs["input_ids"].shape[1]
         return [
             tokenizer.decode(outputs[i][prompt_len:], skip_special_tokens=True)
-            for i in range(len(windows))
+            for i in range(len(prompts))
         ]
 
     translated: dict[str, str] = {}
@@ -257,7 +267,9 @@ def cmd_translate(args: argparse.Namespace) -> None:
         retry = []
         for chunk_start in range(0, len(pending), BATCH_SIZE):
             chunk = pending[chunk_start : chunk_start + BATCH_SIZE]
-            responses = generate_batch([(context, lines) for context, lines, _ in chunk])
+            responses = generate_batch(
+                [window_prompt((context, lines)) for context, lines, _ in chunk]
+            )
             for (context, lines, failures), response in zip(chunk, responses, strict=True):
                 try:
                     translated.update(
@@ -274,26 +286,93 @@ def cmd_translate(args: argparse.Namespace) -> None:
                     retry.extend((c, ls, 0) for c, ls in split_window(context, lines))
         pending = retry
 
+    # T0.30 passo 2: encurta só as falas acima do orçamento (+ tolerância).
+    # Fidelidade de cada candidato julgada pelo próprio Qwen já carregado:
+    # um forward pass (sem gerar texto) e a probabilidade de "YES" contra
+    # "NO". A fala fiel continua como 2º candidato pro editor.
+    yes_id = tokenizer.encode("YES", add_special_tokens=False)[0]
+    no_id = tokenizer.encode("NO", add_special_tokens=False)[0]
+
+    def fidelity(source: str, candidates: list[str]) -> list[float]:
+        prompts = [chat(build_judge_prompt(source, c, language)) for c in candidates]
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        with torch.no_grad():
+            logits = model(**inputs).logits[:, -1, [yes_id, no_id]].float()
+        return torch.softmax(logits, dim=-1)[:, 0].tolist()
+
+    faithful = dict(translated)
+    current = dict(translated)
+    count = language.count_syllables
+
+    def over_budget(seg_id: str) -> bool:
+        return count(current[seg_id]) > target_syllables[seg_id] * (1 + TOLERANCE_OFF_SCREEN)
+
+    queue = [seg_id for seg_id in current if over_budget(seg_id)]
+    for round_number in range(1, SHORTEN_ROUNDS + 1):
+        if not queue:
+            break
+        print(f"[translate] encurtar rodada {round_number}: {len(queue)} falas acima do orçamento")
+        next_queue = []
+        for chunk_start in range(0, len(queue), BATCH_SIZE):
+            chunk = queue[chunk_start : chunk_start + BATCH_SIZE]
+            prompts = [
+                chat(
+                    build_shorten_prompt(
+                        source_text[s], current[s], target_syllables[s], language
+                    )
+                )
+                for s in chunk
+            ]
+            for seg_id, response in zip(chunk, generate_batch(prompts), strict=True):
+                try:
+                    options = parse_candidates(response, language)
+                except (ValueError, json.JSONDecodeError):
+                    continue
+                swearing = profanity_count(faithful[seg_id], language)
+                options = [
+                    o
+                    for o in options
+                    if not has_forbidden_word(o, language)
+                    and profanity_count(o, language) >= swearing
+                ]
+                if not options:
+                    continue
+                scores = fidelity(source_text[seg_id], options)
+                pick = choose_shortened(
+                    count(current[seg_id]),
+                    int(target_syllables[seg_id] * (1 - TOLERANCE_OFF_SCREEN)),
+                    [(o, count(o), f) for o, f in zip(options, scores, strict=True)],
+                )
+                print(f"[translate] {seg_id} fidelidade={[round(x, 2) for x in scores]} "
+                      f"opções={options} escolha={pick!r}")
+                if pick is None:
+                    continue
+                current[seg_id] = pick
+                if over_budget(seg_id):
+                    next_queue.append(seg_id)
+        queue = next_queue
+
+    def candidate(text: str, seg_id: str) -> dict:
+        scored = score_candidate(text, target_syllables[seg_id], source_text[seg_id])
+        return {
+            "text": scored.text,
+            "syllables": scored.syllables,
+            "budget_score": scored.budget_score,
+            "naturalness_score": scored.naturalness_score,
+            "expressiveness_score": scored.expressiveness_score,
+            "score": scored.score,
+        }
+
     results = []
     for job in jobs:
         for line in job["lines"]:
-            text = translated.get(line["id"])
-            candidates = []
-            if text is not None:
-                scored = score_candidate(
-                    text, target_syllables[line["id"]], source_text[line["id"]]
-                )
-                candidates.append(
-                    {
-                        "text": scored.text,
-                        "syllables": scored.syllables,
-                        "budget_score": scored.budget_score,
-                        "naturalness_score": scored.naturalness_score,
-                        "expressiveness_score": scored.expressiveness_score,
-                        "score": scored.score,
-                    }
-                )
-            results.append({"id": line["id"], "candidates": candidates})
+            seg_id = line["id"]
+            texts = [] if seg_id not in current else list(dict.fromkeys(
+                [current[seg_id], faithful[seg_id]]
+            ))
+            results.append(
+                {"id": seg_id, "candidates": [candidate(t, seg_id) for t in texts]}
+            )
 
     Path(args.output).write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
 

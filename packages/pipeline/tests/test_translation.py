@@ -23,6 +23,7 @@ from packages.pipeline.translation import (
     rank_candidates,
     score_candidate,
     sentence_groups,
+    split_by_alignment,
     split_by_source,
     split_sentences,
     split_window,
@@ -515,4 +516,29 @@ def test_mt_options_never_drops_profanity() -> None:
         PT_BR,
     )
     assert all("merda" in text for text, _ in options)
+
+
+def test_split_by_alignment_keeps_sentence_with_its_segment() -> None:
+    # Caso real: "the quote is," | "if you have a problem" — a proporção
+    # deixava "se cê" no fim da primeira fala e "tiver" na segunda.
+    text = "a citação é, se cê tiver um problema"
+    labels = [0, 0, 0, 1, 1, 1, 1, 1]
+    assert split_by_alignment(text, labels, 2) == ["a citação é,", "se cê tiver um problema"]
+
+
+def test_split_by_alignment_is_monotonic_against_noise() -> None:
+    assert split_by_alignment("a b c d e f", [0, 1, 0, 0, 1, 1], 2) == ["a b c d", "e f"]
+
+
+def test_split_by_alignment_gives_every_segment_a_word() -> None:
+    assert split_by_alignment("Aqui tá. Tenho", [0, 0, 0], 3) == ["Aqui", "tá.", "Tenho"]
+    assert split_by_alignment("Oi", [0], 2) is None
+
+
+def test_sentence_groups_do_not_join_long_unpunctuated_lines() -> None:
+    texts = [
+        "everyone's nervous but you're not you're calm you're relaxed",
+        "you're going to draw a lot of attention",
+    ]
+    assert sentence_groups(texts) == [[0], [1]]
 

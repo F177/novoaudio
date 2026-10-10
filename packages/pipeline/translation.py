@@ -748,13 +748,26 @@ _TERMINAL = re.compile(r"[.!?…][\"')\]]*$")
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 
 
+# Fala sem nenhuma pontuação e mais longa que isso não é emendada: o ASR
+# perdeu a pontuação, e juntar vira um corrido sem fim de frase. Caso real
+# ("but you're not you're calm" virou "mas cê não tá calmo").
+_UNPUNCTUATED_JOIN_MAX_WORDS = 4
+
+
+def _continues(text: str) -> bool:
+    text = text.strip()
+    if _TERMINAL.search(text):
+        return False
+    return bool(re.search(r"[.,;:!?…]", text)) or len(text.split()) <= _UNPUNCTUATED_JOIN_MAX_WORDS
+
+
 def sentence_groups(texts: list[str]) -> list[list[int]]:
     """Índices de falas consecutivas que formam frases inteiras: uma fala que
     não termina em pontuação final continua na próxima ("Here you" + "go.").
     O tradutor vê a frase inteira, nunca o pedaço."""
     groups: list[list[int]] = []
     for i in range(len(texts)):
-        if groups and not _TERMINAL.search(texts[i - 1].strip()):
+        if groups and _continues(texts[i - 1]):
             groups[-1].append(i)
         else:
             groups.append([i])
@@ -856,4 +869,33 @@ def split_by_source(translation: str, sources: list[str]) -> list[str]:
         start = cut
     parts.append(" ".join(words[start:]))
     return parts
+
+
+def split_by_alignment(translation: str, word_segments: list[int], n: int) -> list[str] | None:
+    """Reparte a tradução entre `n` falas seguindo o alinhamento: cada
+    palavra traduzida traz o índice da fala de origem com que ela se alinha
+    (atenção do tradutor). Os cortes são os que mais concordam com isso,
+    mantendo a ordem e pelo menos uma palavra por fala. `None` quando não dá
+    (contagem de palavras não bate ou faltam palavras) — aí vale a proporção.
+    """
+    words = translation.split()
+    if len(words) != len(word_segments) or len(words) < n:
+        return None
+    inf = float("inf")
+    # cost[j] = menor erro com a palavra atual na fala j; back guarda a origem
+    cost = [0.0 if word_segments[0] == 0 else 1.0] + [inf] * (n - 1)
+    back: list[list[int]] = [[0] * n]
+    for label in word_segments[1:]:
+        new, came = [inf] * n, [0] * n
+        for j in range(n):
+            stay, step = cost[j], cost[j - 1] if j else inf
+            new[j], came[j] = (stay, j) if stay <= step else (step, j - 1)
+            new[j] += label != j
+        cost, back = new, [*back, came]
+    j, owner = n - 1, []
+    for i in range(len(words) - 1, -1, -1):
+        owner.append(j)
+        j = back[i][j]
+    owner.reverse()
+    return [" ".join(w for w, o in zip(words, owner, strict=True) if o == k) for k in range(n)]
 

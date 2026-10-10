@@ -24,6 +24,8 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import bisect
+import itertools
 import json
 import os
 import time
@@ -184,6 +186,7 @@ def cmd_translate(args: argparse.Namespace) -> None:
         profanity_count,
         score_candidate,
         sentence_groups,
+        split_by_alignment,
         split_by_source,
         split_sentences,
         split_window,
@@ -328,9 +331,51 @@ def cmd_translate(args: argparse.Namespace) -> None:
         started = time.time()
         # Medido em CPU: ~30 s por Short (beam 8), mais lento que o Qwen na GPU.
         mt_tokenizer = MarianTokenizer.from_pretrained(language.mt_model)
-        mt_model = MarianMTModel.from_pretrained(language.mt_model).eval().to(device)
+        # eager: a atenção otimizada (sdpa) não devolve os pesos usados no `split`
+        mt_model = MarianMTModel.from_pretrained(
+            language.mt_model, attn_implementation="eager"
+        ).eval().to(device)
         ordered = [line for job in jobs for line in job["lines"]]
         texts = [line["text"] for line in ordered]
+        prefix_tokens = len(mt_tokenizer(language.mt_prefix.strip())["input_ids"]) - 1
+
+        def split(text: str, sources: list[str]) -> list[str]:
+            """Divide a tradução entre as falas pela atenção do próprio
+            tradutor (de qual palavra em inglês cada palavra traduzida veio);
+            proporção de caracteres só quando o alinhamento não fecha."""
+            if len(sources) == 1:
+                return [text]
+            src = mt_tokenizer(
+                language.mt_prefix + " ".join(sources), return_tensors="pt"
+            ).to(device)
+            tgt = mt_tokenizer(text_target=text, return_tensors="pt")["input_ids"].to(device)
+            with torch.no_grad():
+                attention = mt_model(**src, labels=tgt, output_attentions=True).cross_attentions
+            weights = torch.stack(attention).mean(dim=(0, 2))[0]  # (alvo, origem)
+            # fala de cada token de origem: conta os inícios de palavra ("▁")
+            bounds = list(itertools.accumulate(len(source.split()) for source in sources))
+            src_segment, word = [], -1
+            for k, token in enumerate(mt_tokenizer.convert_ids_to_tokens(src["input_ids"][0])):
+                inside = prefix_tokens <= k < src["input_ids"].shape[1] - 1
+                word += inside and token.startswith("▁")
+                src_segment.append(
+                    min(bisect.bisect_right(bounds, word), len(sources) - 1) if inside else -1
+                )
+            per_segment = torch.stack(
+                [weights[:, [s == k for s in src_segment]].sum(dim=1) for k in range(len(sources))],
+                dim=1,
+            )  # (alvo, falas)
+            word_scores: list[torch.Tensor] = []
+            for k, token in enumerate(mt_tokenizer.convert_ids_to_tokens(tgt[0])[:-1]):
+                if token.startswith("▁") or not word_scores:
+                    word_scores.append(per_segment[k].clone())
+                else:
+                    word_scores[-1] += per_segment[k]
+            labels = [int(scores.argmax()) for scores in word_scores]
+            return split_by_alignment(text, labels, len(sources)) or split_by_source(
+                text, sources
+            )
+
         for group in sentence_groups(texts):
             sources = [texts[i] for i in group]
             sentences = split_sentences(" ".join(sources))
@@ -361,7 +406,7 @@ def cmd_translate(args: argparse.Namespace) -> None:
             best = " ".join(o[0][0] for o in options)
             chosen = " ".join(choose_alternatives(options, budget, count))
             for seg_id, fit, top in zip(
-                ids, split_by_source(chosen, sources), split_by_source(best, sources), strict=True
+                ids, split(chosen, sources), split(best, sources), strict=True
             ):
                 if fit:
                     translated[seg_id], faithful[seg_id] = fit, top or fit

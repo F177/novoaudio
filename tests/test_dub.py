@@ -2,11 +2,14 @@ import json
 import subprocess
 
 from scripts.dub import (
+    _code_fingerprint,
     _get_git_state,
     _hash_file,
     _hash_json,
     _is_bad_synthesis,
     _record_stage_hash,
+    _stage_code_objects,
+    _stage_key,
     _stage_needs_rerun,
     build_stage_report,
     pick_best_synthesis,
@@ -504,3 +507,51 @@ def test_changing_segmentation_invalidates_translate_and_synth_but_not_upstream_
         tmp_path, "synthesize", synth_hash_v2, synth_output,
         force=False, force_stage=None,
     )
+
+
+def _prompt_v1() -> str:
+    return "traduza"
+
+
+def _prompt_v1_with_comment() -> str:
+    # comentário novo não muda a lógica
+    return "traduza"
+
+
+def _prompt_v2() -> str:
+    return "traduza sem cortar conteúdo"
+
+
+def test_code_fingerprint_ignores_comments_but_not_logic() -> None:
+    # Normaliza o nome da função, que não faz parte da "lógica" comparada.
+    import scripts.dub as dub_module
+
+    def fingerprint(fn) -> str:
+        import ast
+        import inspect
+
+        tree = ast.parse(inspect.getsource(fn))
+        tree.body[0].name = "f"
+        return dub_module._hash_json(ast.dump(tree))
+
+    assert fingerprint(_prompt_v1) == fingerprint(_prompt_v1_with_comment)
+    assert fingerprint(_prompt_v1) != fingerprint(_prompt_v2)
+    assert _code_fingerprint([_prompt_v1]) == _code_fingerprint([_prompt_v1])
+
+
+def test_stage_key_changes_when_stage_code_changes() -> None:
+    # Mesma entrada, código diferente => chave diferente (é o que faz a
+    # etapa rerodar depois de mudar prompt/pontuação, sem --force-stage).
+    assert _stage_key("translate", "mesma-entrada") != _stage_key("synthesize", "mesma-entrada")
+    assert _stage_key("translate", "a") != _stage_key("translate", "b")
+    assert _stage_key("translate", "a") == _stage_key("translate", "a")
+
+
+def test_stage_code_objects_cover_every_force_stage_choice() -> None:
+    assert set(_stage_code_objects()) == {
+        "separate_stems",
+        "transcribe",
+        "translate",
+        "synthesize",
+        "evaluate",
+    }

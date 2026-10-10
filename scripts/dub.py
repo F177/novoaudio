@@ -43,11 +43,14 @@ Uso (rodar como módulo, `-m`, não `python scripts/dub.py` — senão
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
+import inspect
 import json
 import os
 import re
 import subprocess
+import textwrap
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -269,6 +272,38 @@ def _stage_needs_rerun(
     if not output_path.exists():
         return True
     return not _stage_hash_matches(cache_dir, stage, current_hash)
+
+
+def _code_fingerprint(objects: list[Any]) -> str:
+    """Hash do código-fonte de funções/módulos, via AST — comentário e
+    formatação não mudam o hash, mudança de lógica (ou de texto de prompt,
+    que é constante no código) muda."""
+    dumps = [ast.dump(ast.parse(textwrap.dedent(inspect.getsource(o)))) for o in objects]
+    return _hash_json(dumps)
+
+
+def _stage_code_objects() -> dict[str, list[Any]]:
+    from packages.pipeline import synthesis, translation
+    from packages.ptbr import normalize
+    from scripts import pod_worker
+
+    return {
+        "separate_stems": [pod_worker.cmd_separate_stems],
+        "transcribe": [pod_worker.cmd_transcribe, pod_worker._patch_torch_compat_shims],
+        "translate": [pod_worker.cmd_translate, translation],
+        "synthesize": [pod_worker.cmd_synthesize, synthesis, normalize],
+        "evaluate": [pod_worker.cmd_evaluate],
+    }
+
+
+def _stage_key(stage: str, input_hash: str) -> str:
+    """Achado real (2026-10-09): o hash da T0.25 só cobria os DADOS de
+    entrada — mudar o prompt/pontuação em `translation.py` mantinha o
+    `translations.json` velho, e a correção só apareceu no vídeo depois de
+    `--force-stage translate`. A chave de cada etapa agora também cobre o
+    código que produz a saída dela. Não cobre versão de biblioteca/modelo
+    no Pod — pra isso, `--force-stage`."""
+    return _hash_json([input_hash, _code_fingerprint(_stage_code_objects()[stage])])
 
 
 def _has_video_stream(path: Path) -> bool:
@@ -509,13 +544,18 @@ def run_pipeline(
     def needs(path: Path) -> bool:
         return force or not path.exists()
 
-    def needs_stage(output_path: Path, stage: str, current_hash: str) -> bool:
+    def needs_stage(output_path: Path, stage: str, input_hash: str) -> bool:
         return _stage_needs_rerun(
-            cache_dir, stage, current_hash, output_path, force=force, force_stage=force_stage
+            cache_dir,
+            stage,
+            _stage_key(stage, input_hash),
+            output_path,
+            force=force,
+            force_stage=force_stage,
         )
 
-    def record_stage(stage: str, current_hash: str) -> None:
-        _record_stage_hash(cache_dir, stage, current_hash)
+    def record_stage(stage: str, input_hash: str) -> None:
+        _record_stage_hash(cache_dir, stage, _stage_key(stage, input_hash))
 
     # --- 1. extrai áudio original (local, ffmpeg, sem GPU) ---
     audio_path = cached("audio.wav")
@@ -581,28 +621,31 @@ def run_pipeline(
     # palavras, T0.15) resolve na raiz — o segmento passa a ter orçamento de
     # tempo real, em vez de brigar contra um piso estrutural do modelo.
     segments: list[Segment] = segment_words(words, min_duration=MIN_SYNTHESIS_SECONDS)
-    if needs(segments_path):
-        segments_path.write_text(
-            json.dumps(
-                [
-                    {
-                        "id": f"seg{i:04d}",
-                        "t_inicio": s.t_inicio,
-                        "t_fim": s.t_fim,
-                        "texto": s.texto,
-                        "speaker": s.speaker,
-                        "pausas_internas": [
-                            {"after_word_index": p.after_word_index, "duration": p.duration}
-                            for p in s.pausas_internas
-                        ],
-                        "curto": s.curto,
-                    }
-                    for i, s in enumerate(segments)
-                ],
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
+    # Escrito SEMPRE: a segmentação é recalculada a cada rodada, e o arquivo
+    # antes só era gravado na primeira — achado real (vídeo padrão): ficou
+    # com 12 segmentos enquanto o pipeline trabalhava com 15, e enganou o
+    # diagnóstico manual duas vezes. É só registro do que foi usado.
+    segments_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": f"seg{i:04d}",
+                    "t_inicio": s.t_inicio,
+                    "t_fim": s.t_fim,
+                    "texto": s.texto,
+                    "speaker": s.speaker,
+                    "pausas_internas": [
+                        {"after_word_index": p.after_word_index, "duration": p.duration}
+                        for p in s.pausas_internas
+                    ],
+                    "curto": s.curto,
+                }
+                for i, s in enumerate(segments)
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     calibration = load_calibration()
 

@@ -3,8 +3,8 @@
 
     python -m scripts.voice_bank --out-dir /root/voice_bank [--lora-adapter-path P]
 
-Para cada descrição em `VOICES` (homens e mulheres de 20 a 50 anos, timbres
-variados) sai, em `out-dir`:
+Para cada descrição em `VOICES` (homens de 20 a 50 anos, timbres variados)
+sai, em `out-dir`:
 - `<id>_A_vg_pt.wav`: MOSS-VoiceGenerator falando português direto. O model
   card só promete chinês e inglês — medido aqui se o português presta.
 - `<id>_design_en.wav`: VoiceGenerator falando inglês (timbre desenhado).
@@ -35,23 +35,20 @@ TARGET_SECONDS = 10.0
 RANDOM_VOICES = 12
 
 _STYLE = "speaking casually and naturally like a Brazilian YouTuber, with a Brazilian accent"
+# Só homens por enquanto (decisão do usuário, 2026-10-10), 20 a 50 anos, timbres variados.
 VOICES = {
-    "h22": f"A 22-year-old young man, bright energetic voice, fast speech, {_STYLE}.",
-    "h26": f"A 26-year-old man, relaxed friendly voice, light and clear, {_STYLE}.",
-    "h30": f"A 30-year-old man, deep warm baritone, confident, {_STYLE}.",
+    "h21": f"A 21-year-old young man, bright energetic voice, fast speech, {_STYLE}.",
+    "h24": f"A 24-year-old man, light slightly nasal voice, playful and joking, {_STYLE}.",
+    "h27": f"A 27-year-old man, relaxed friendly voice, clear and smooth, {_STYLE}.",
+    "h29": f"A 29-year-old man, punchy loud voice, hyped gamer streamer, {_STYLE}.",
+    "h31": f"A 31-year-old man, deep warm baritone, confident, {_STYLE}.",
     "h34": f"A 34-year-old man, slightly raspy husky voice, laid-back, {_STYLE}.",
-    "h38": f"A 38-year-old man, clear medium-pitched voice, enthusiastic presenter, {_STYLE}.",
-    "h42": f"A 42-year-old man, low resonant voice, calm and assertive, {_STYLE}.",
+    "h37": f"A 37-year-old man, clear medium-pitched voice, enthusiastic presenter, {_STYLE}.",
+    "h40": f"A 40-year-old man, soft calm voice, thoughtful podcast host, {_STYLE}.",
+    "h43": f"A 43-year-old man, low resonant voice, calm and assertive, {_STYLE}.",
     "h46": f"A 46-year-old man, gravelly mature voice, expressive storyteller, {_STYLE}.",
+    "h48": f"A 48-year-old man, bright mature tenor voice, upbeat and talkative, {_STYLE}.",
     "h50": f"A 50-year-old man, rich deep voice, steady and authoritative, {_STYLE}.",
-    "m22": f"A 22-year-old young woman, bright cheerful voice, fast speech, {_STYLE}.",
-    "m26": f"A 26-year-old woman, soft friendly voice, light and clear, {_STYLE}.",
-    "m30": f"A 30-year-old woman, warm medium-low voice, confident, {_STYLE}.",
-    "m34": f"A 34-year-old woman, slightly husky voice, relaxed and witty, {_STYLE}.",
-    "m38": f"A 38-year-old woman, clear expressive voice, enthusiastic presenter, {_STYLE}.",
-    "m42": f"A 42-year-old woman, low smooth voice, calm and assertive, {_STYLE}.",
-    "m46": f"A 46-year-old woman, mature warm voice, expressive storyteller, {_STYLE}.",
-    "m50": f"A 50-year-old woman, rich mature voice, steady and authoritative, {_STYLE}.",
 }
 
 

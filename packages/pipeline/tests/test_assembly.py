@@ -13,10 +13,12 @@ from packages.pipeline.assembly import (
     TimelineOverflowError,
     has_clipping,
     limit_peaks,
+    match_speech_levels,
     mix_with_background,
     normalize_loudness,
     place_segments_on_timeline,
     remux_with_video,
+    speech_level_db,
 )
 
 SAMPLE_RATE = 16000
@@ -360,3 +362,33 @@ def test_remux_with_video_preserves_duration(tmp_path) -> None:
     )
     duration = float(probe.stdout.strip())
     assert duration == pytest.approx(2.0, abs=0.2)
+
+
+def _speech(db: float, seconds: float = 1.0, sr: int = 16000) -> np.ndarray:
+    t = np.arange(int(seconds * sr)) / sr
+    return (10 ** (db / 20) * np.sqrt(2) * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
+
+
+def test_speech_level_ignores_pauses() -> None:
+    with_pause = np.concatenate([_speech(-20.0), np.zeros(16000, dtype=np.float32)])
+    assert speech_level_db(with_pause, 16000) == pytest.approx(-20.0, abs=0.2)
+    assert speech_level_db(np.zeros(16000, dtype=np.float32), 16000) is None
+
+
+def test_match_speech_levels_removes_tts_variation_and_keeps_source_dynamics() -> None:
+    # Caso real: uma fala gerada ~5 dB abaixo das outras, original no mesmo nível.
+    segs = [TimedAudio(0.0, _speech(-20.0)), TimedAudio(1.0, _speech(-23.0))]
+    segs.append(TimedAudio(2.0, _speech(-20.0)))
+    leveled = match_speech_levels(segs, [-18.0, -18.0, -18.0], 16000)
+    assert speech_level_db(leveled[1].audio, 16000) == pytest.approx(-20.0, abs=0.2)
+    # original 6 dB mais alto (grito) continua 6 dB mais alto na dublagem
+    shout = match_speech_levels(segs, [-18.0, -12.0, -18.0], 16000)
+    assert speech_level_db(shout[1].audio, 16000) == pytest.approx(-14.0, abs=0.2)
+
+
+def test_match_speech_levels_limits_gain_and_skips_unknown() -> None:
+    segs = [TimedAudio(0.0, _speech(-20.0)), TimedAudio(1.0, _speech(-40.0))]
+    assert match_speech_levels(segs, [-20.0, None], 16000)[1] is segs[1]
+    out = match_speech_levels(segs, [-20.0, -20.0], 16000)
+    assert speech_level_db(out[1].audio, 16000) == pytest.approx(-30.0, abs=0.2)
+

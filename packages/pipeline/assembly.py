@@ -89,6 +89,56 @@ class TimedAudio:
     audio: np.ndarray  # mono, float32, amplitude em [-1, 1]
 
 
+# Achado real (2026-10-10, ouvindo os Shorts): o MOSS gera cada fala num
+# nível diferente (até ~5 dB entre falas do mesmo Short), e a normalização
+# final é do áudio inteiro — a fala gerada mais baixa soa como "o volume
+# caiu". Cada fala vai pro nível da fala ORIGINAL correspondente, relativo à
+# mediana do vídeo: some a variação aleatória do TTS, fica a do locutor (um
+# grito continua mais alto que um comentário calmo). Pontos de partida não
+# calibrados.
+SPEECH_GATE_DB = -45.0
+MAX_LEVEL_GAIN_DB = 10.0
+_LEVEL_FRAME_SECONDS = 0.05
+
+
+def speech_level_db(audio: np.ndarray, sample_rate: int) -> float | None:
+    """Nível médio só dos quadros com voz (pausas e silêncio fora), em dB;
+    `None` se não há voz."""
+    frame = max(1, int(_LEVEL_FRAME_SECONDS * sample_rate))
+    n = len(audio) // frame
+    if n == 0:
+        return None
+    power = (audio[: n * frame].reshape(n, frame).astype(np.float64) ** 2).mean(axis=1)
+    voiced = power[10 * np.log10(power + 1e-12) > SPEECH_GATE_DB]
+    return float(10 * np.log10(voiced.mean())) if voiced.size else None
+
+
+def match_speech_levels(
+    segments: list[TimedAudio], source_levels: list[float | None], sample_rate: int
+) -> list[TimedAudio]:
+    """Ganho por fala pra que a diferença de nível entre as falas dubladas
+    repita a das originais. Fala sem nível conhecido (dela ou da original)
+    fica como está; ganho limitado a ±`MAX_LEVEL_GAIN_DB`."""
+    dub_levels = [speech_level_db(seg.audio, sample_rate) for seg in segments]
+    pairs = [(d, o) for d, o in zip(dub_levels, source_levels, strict=True) if d and o]
+    if not pairs:
+        return segments
+    dub_mid = float(np.median([d for d, _ in pairs]))
+    source_mid = float(np.median([o for _, o in pairs]))
+    out = []
+    for seg, dub, source in zip(segments, dub_levels, source_levels, strict=True):
+        if dub is None or source is None:
+            out.append(seg)
+            continue
+        gain = float(
+            np.clip(dub_mid + (source - source_mid) - dub, -MAX_LEVEL_GAIN_DB, MAX_LEVEL_GAIN_DB)
+        )
+        out.append(
+            TimedAudio(seg.start_seconds, (seg.audio * 10 ** (gain / 20)).astype(np.float32))
+        )
+    return out
+
+
 @dataclass
 class PlacementResult:
     timeline: np.ndarray

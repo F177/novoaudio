@@ -64,10 +64,12 @@ from dotenv import load_dotenv
 from packages.pipeline import segmentation
 from packages.pipeline.assembly import (
     TimedAudio,
+    match_speech_levels,
     mix_with_background,
     normalize_loudness,
     place_segments_on_timeline,
     remux_with_video,
+    speech_level_db,
 )
 from packages.pipeline.budget import TOLERANCE_OFF_SCREEN, load_calibration, syllables_that_fit
 from packages.pipeline.diagnostics import build_diagnostics
@@ -891,6 +893,7 @@ def run_pipeline(
             source_vocals_audio = source_vocals_audio.mean(axis=1)
 
     timed_segments: list[TimedAudio] = []
+    source_levels: list[float | None] = []  # nível de voz da fala original, por item acima
     segment_results: list[dict[str, Any]] = []
 
     for i, s in enumerate(segments):
@@ -946,6 +949,11 @@ def run_pipeline(
                         audio = apply_pitch_contour(audio, sr, source_pitch_contour)
 
             timed_segments.append(TimedAudio(start_seconds=s.t_inicio, audio=audio))
+            source_levels.append(
+                speech_level_db(source_segment_audio, source_vocals_sr)
+                if source_segment_audio is not None
+                else None
+            )
             final_audio_by_seg.append((seg_id, audio.copy(), sr))
 
             achieved_seconds = meta["achieved_seconds"]
@@ -1044,6 +1052,7 @@ def run_pipeline(
     # determinístico). Fundo alto, sobreposição com vizinho e corte no fim
     # da timeline só aparecem depois da mixagem, que é onde recortamos agora.
     total_duration = _probe_duration_seconds(video_path)
+    timed_segments = match_speech_levels(timed_segments, source_levels, SYNTH_SAMPLE_RATE)
     if allow_timeline_overflow:
         # Diagnóstico/dev only — NUNCA o default do produto (ver docstring de
         # `place_segments_on_timeline`: esses limiares são físicos, não

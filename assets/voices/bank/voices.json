@@ -1,0 +1,42 @@
+[
+  {
+    "id": "h21",
+    "gender": "m",
+    "path": "voices/bank/h21.wav"
+  },
+  {
+    "id": "h27",
+    "gender": "m",
+    "path": "voices/bank/h27.wav"
+  },
+  {
+    "id": "h31",
+    "gender": "m",
+    "path": "voices/bank/h31.wav"
+  },
+  {
+    "id": "h34",
+    "gender": "m",
+    "path": "voices/bank/h34.wav"
+  },
+  {
+    "id": "h40",
+    "gender": "m",
+    "path": "voices/bank/h40.wav"
+  },
+  {
+    "id": "h46",
+    "gender": "m",
+    "path": "voices/bank/h46.wav"
+  },
+  {
+    "id": "h48",
+    "gender": "m",
+    "path": "voices/bank/h48.wav"
+  },
+  {
+    "id": "h50",
+    "gender": "m",
+    "path": "voices/bank/h50.wav"
+  }
+]

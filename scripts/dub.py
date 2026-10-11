@@ -1,7 +1,7 @@
 """CLI de ponta a ponta (T0.12): vídeo em inglês entra, vídeo dublado em
 pt-BR sai, com relatório JSON de segmentos e flags.
 
-Orquestra as etapas de GPU (Demucs, WhisperX, Qwen2.5-7B-Instruct,
+Orquestra as etapas de GPU (Demucs, WhisperX, OPUS-MT,
 MOSS-TTS, Whisper large-v3) rodando remotamente num Pod RunPod comum via
 SSH — ver `scripts/pod_worker.py` (o que roda no Pod) e
 `scripts/pod_runner.py` (como este script fala com o Pod). Não usa
@@ -101,7 +101,6 @@ from packages.pipeline.scorecard import build_scorecard
 from packages.pipeline.segmentation import Segment, Word, segment_words
 from packages.pipeline.subtitles import build_srt
 from packages.pipeline.synthesis import MIN_SYNTHESIS_SECONDS, is_within_tolerance
-from packages.pipeline.translation import WindowLine, build_windows, extract_proper_nouns
 from scripts import r2
 from scripts.pod_runner import PodConfig, download_from_pod, run_on_pod, upload_to_pod
 
@@ -539,7 +538,6 @@ def run_pipeline(
     emotion_match: bool = False,
     allow_timeline_overflow: bool = False,
     force_stage: str | None = None,
-    translator: str = "llm",
 ) -> dict[str, Any]:
     cache_dir.mkdir(parents=True, exist_ok=True)
     pod = PodConfig.from_env()
@@ -662,51 +660,17 @@ def run_pipeline(
 
     calibration = load_calibration()
 
-    # --- 5. tradução com restrição de sílabas (remoto, Qwen2.5) ---
+    # --- 5. tradução (remoto, OPUS-MT; T0.30) ---
     # T0.25: `translate_jobs` é montado SEMPRE (não só quando a etapa vai
     # rodar) — precisamos do conteúdo pra calcular o hash de entrada e
     # decidir se a etapa está obsoleta, mesmo quando `translations.json`
     # antigo ainda existe no disco.
-    #
-    # T0.23: termos extraídos uma vez do vídeo inteiro (não por segmento) —
-    # nome próprio citado em vários trechos (ex. "Hurts" o quarterback) só é
-    # reconhecível como recorrente olhando o vídeo todo, não a frase isolada
-    # que cada job vê.
-    preserve_terms = extract_proper_nouns([s.texto for s in segments])
-    # T0.30: uma janela de diálogo por job (ver `translation.build_windows`).
-    # Locutor vira rótulo curto (A, B, ...) na ordem em que aparece — o
-    # modelo só precisa saber quem fala com quem pra resolver pronome.
-    speaker_labels: dict[str | None, str] = {}
-    for s in segments:
-        if s.speaker not in speaker_labels:
-            speaker_labels[s.speaker] = chr(ord("A") + len(speaker_labels))
-    lines: list[WindowLine] = []
-    target_syllables_by_id: dict[str, int] = {}
+    lines = []
     for i, s in enumerate(segments):
-        seg_id = f"seg{i:04d}"
         pause_seconds = sum(p.duration for p in s.pausas_internas)
-        target_syllables_by_id[seg_id] = max(
-            1, syllables_that_fit(s.t_fim - s.t_inicio, calibration, pause_seconds=pause_seconds)
-        )
-        lines.append(WindowLine(seg_id, speaker_labels[s.speaker], s.texto))
-
-    def line_json(line: WindowLine) -> dict[str, Any]:
-        return {"id": line.id, "speaker": line.speaker, "text": line.text}
-
-    translate_jobs = [
-        {
-            "id": f"win{w:03d}",
-            "context_before": [line_json(line) for line in context],
-            "lines": [
-                {**line_json(line), "target_syllables": target_syllables_by_id[line.id]}
-                for line in window
-            ],
-            "preserve_terms": preserve_terms,
-            "target_language": TARGET_LANGUAGE,
-            "engine": translator,
-        }
-        for w, (context, window) in enumerate(build_windows(lines))
-    ]
+        target = syllables_that_fit(s.t_fim - s.t_inicio, calibration, pause_seconds=pause_seconds)
+        lines.append({"id": f"seg{i:04d}", "text": s.texto, "target_syllables": max(1, target)})
+    translate_jobs = [{"lines": lines, "target_language": TARGET_LANGUAGE}]
     translate_hash = _hash_json(translate_jobs)
     translations_path = cached("translations.json")
     if needs_stage(translations_path, "translate", translate_hash):
@@ -1361,12 +1325,6 @@ def main() -> None:
             "síntese, T0.26), sem fingir que o corte não aconteceu."
         ),
     )
-    parser.add_argument(
-        "--translator",
-        choices=("llm", "opus", "opus+llm"),
-        default="llm",
-        help="motor de tradução (benchmark 2026-10-10): Qwen, OPUS-MT, ou OPUS + Qwen pra encurtar",
-    )
     args = parser.parse_args()
 
     if not args.video and not args.r2_key:
@@ -1400,7 +1358,6 @@ def main() -> None:
         emotion_match=args.emotion_match,
         allow_timeline_overflow=args.allow_timeline_overflow,
         force_stage=args.force_stage,
-        translator=args.translator,
     )
     transcript_path, translation_path = save_transcript_and_translation(
         report, cache_dir, Path(report["output"])

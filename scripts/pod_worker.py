@@ -4,7 +4,7 @@ Mesma lógica de modelo que `runpod/*/handler.py`, mas sem o envelope de
 job do RunPod Serverless e sem R2: cada subcomando lê/escreve arquivo
 local, e processa um lote de itens numa só chamada (o modelo carrega uma
 vez por invocação do processo, não por item) — evita recarregar
-Demucs/WhisperX/Qwen/MOSS-TTS a cada segmento.
+Demucs/WhisperX/OPUS-MT/MOSS-TTS a cada segmento.
 
 `scripts/dub.py`, rodando na máquina do desenvolvedor, copia os arquivos
 de entrada pro Pod (scp/rsync), chama este script via SSH, e copia o
@@ -200,331 +200,112 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
 
 
 def cmd_translate(args: argparse.Namespace) -> None:
-    """Traduz janelas de diálogo (T0.30): cada job é uma janela de falas com
-    contexto; a saída continua um item por segmento (`id`, `candidates`),
-    no mesmo formato de antes, então nada a jusante muda."""
+    """Traduz as falas com o OPUS-MT (T0.30). Entrada: jobs com as falas na
+    ordem do vídeo; saída: um item por segmento (`id`, `candidates`) — a
+    escolhida e a melhor do tradutor antes de caber no orçamento."""
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import MarianMTModel, MarianTokenizer
 
     from packages.pipeline.budget import TOLERANCE_OFF_SCREEN
     from packages.pipeline.translation import (
         LANGUAGES,
-        SHORTEN_ROUNDS,
-        WindowLine,
-        build_judge_prompt,
-        build_shorten_prompt,
-        build_window_prompt,
+        MT_BEAMS,
         choose_alternatives,
-        choose_shortened,
-        has_disallowed_script,
-        has_forbidden_word,
         mt_options,
-        parse_candidates,
-        parse_window_response,
-        profanity_count,
         score_candidate,
         sentence_groups,
         split_by_alignment,
         split_by_source,
         split_sentences,
-        split_window,
     )
 
     jobs = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    # Um idioma de destino por chamada (o vídeo inteiro vai pro mesmo idioma);
-    # a lista de tokens proibidos depende do sistema de escrita dele.
+    # Um idioma de destino por chamada (o vídeo inteiro vai pro mesmo idioma).
     (language,) = {LANGUAGES[job["target_language"]] for job in jobs} or {LANGUAGES["pt-BR"]}
-    # Motor de tradução (benchmark 2026-10-10): "llm" = janelas no Qwen;
-    # "opus" = tradutor dedicado OPUS-MT em CPU, sem LLM; "opus+llm" = OPUS e
-    # o Qwen só pra encurtar o que ainda passa do orçamento.
-    engine = jobs[0].get("engine", "llm") if jobs else "llm"
     device = "cuda"
-    tokenizer = model = None
-    suppressed_token_ids: list[int] = []
-
-    def load_llm() -> None:
-        nonlocal tokenizer, model, suppressed_token_ids
-        if model is not None:
-            return
-        model_id = "Qwen/Qwen2.5-7B-Instruct"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        # Geração em lote de um causal LM precisa de padding à esquerda (alinha
-        # o FIM de todos os prompts na mesma posição) e de um pad_token (Qwen
-        # não define um por padrão).
-        tokenizer.padding_side = "left"
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.bfloat16, device_map=device
-        )
-
-        # Achado real (NFL seg0022, "but evidently"): o Qwen troca pro chinês
-        # no meio da frase de forma sistemática pra certas entradas — 3 retries
-        # × 5 candidatos, todos contaminados, mesmo com instrução no prompt.
-        # Proibir na fonte: nenhum token cujo texto tenha letra fora do
-        # sistema de escrita do idioma de destino pode ser gerado. Tokens de
-        # byte parcial (decodificam como U+FFFD) ficam liberados de
-        # propósito — o português também monta
-        # acentos a partir deles; `parse_window_response` segue como rede de
-        # segurança.
-        suppressed_token_ids = [
-            token_id
-            for token_id in range(len(tokenizer))
-            if has_disallowed_script(tokenizer.decode([token_id]), language)
-        ]
-
-    # Lote limitado por segurança de memória (prompt de janela é maior que o
-    # de segmento). Janela que falha na validação (id faltando, JSON
-    # quebrado) é refeita inteira — nunca aceita pela metade, senão uma fala
-    # fundida na vizinha seria dita duas vezes. Depois de ATTEMPTS_PER_SIZE
-    # falhas, a janela é dividida ao meio (`split_window`), até 1 fala com
-    # contexto; uma fala sozinha que ainda falhar fica sem tradução (dub.py
-    # cai pro texto original) em vez de travar o vídeo.
-    BATCH_SIZE = 8
-    ATTEMPTS_PER_SIZE = 2
-
-    def to_lines(items: list[dict]) -> list[WindowLine]:
-        return [WindowLine(i["id"], i.get("speaker"), i["text"]) for i in items]
-
-    preserve_terms = jobs[0].get("preserve_terms") if jobs else None
-    target_syllables = {line["id"]: line["target_syllables"] for j in jobs for line in j["lines"]}
-    source_text = {line["id"]: line["text"] for j in jobs for line in j["lines"]}
-
-    def chat(prompt: str) -> str:
-        messages = [{"role": "user", "content": prompt}]
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-    def window_prompt(window: tuple[list[WindowLine], list[WindowLine]]) -> str:
-        context, lines = window
-        return chat(
-            build_window_prompt(
-                lines, language, context_before=context, preserve_terms=preserve_terms
-            )
-        )
-
-    # Primeira tentativa de cada janela é determinística (a escolha mais
-    # provável): mais precisa pra tradução e reproduzível — com amostragem, o
-    # mesmo Short saía diferente a cada rodada, às vezes errado. Retentativa
-    # e encurtamento amostram (precisam de alternativas diferentes).
-    def generate_batch(prompts: list[str], *, sample: bool = True) -> list[str]:
-        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
-        sampling = {"do_sample": True, "temperature": 0.7} if sample else {
-            "do_sample": False, "temperature": None, "top_p": None, "top_k": None
-        }
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=2048,
-            suppress_tokens=suppressed_token_ids,
-            **sampling,
-        )
-        prompt_len = inputs["input_ids"].shape[1]
-        return [
-            tokenizer.decode(outputs[i][prompt_len:], skip_special_tokens=True)
-            for i in range(len(prompts))
-        ]
-
-    translated: dict[str, str] = {}
-    faithful: dict[str, str] = {}
     count = language.count_syllables
-    if engine == "llm":
-        load_llm()
-        # (contexto, falas, falhas no tamanho atual)
-        pending = [
-            (to_lines(job.get("context_before", [])), to_lines(job["lines"]), 0) for job in jobs
-        ]
-        while pending:
-            retry = []
-            # greedy e amostrados em lotes separados (cada `generate` tem um modo só)
-            groups = [[p for p in pending if p[2] == 0], [p for p in pending if p[2] > 0]]
-            batches = [
-                (group[i : i + BATCH_SIZE], sample)
-                for group, sample in zip(groups, (False, True), strict=True)
-                for i in range(0, len(group), BATCH_SIZE)
-            ]
-            for chunk, sample in batches:
-                responses = generate_batch(
-                    [window_prompt((context, lines)) for context, lines, _ in chunk], sample=sample
-                )
-                for (context, lines, failures), response in zip(chunk, responses, strict=True):
-                    try:
-                        translated.update(
-                            parse_window_response(response, lines, language)
-                        )
-                        continue
-                    except (ValueError, json.JSONDecodeError) as exc:
-                        print(f"[translate] {lines[0].id}..{lines[-1].id} ({len(lines)} falas) "
-                              f"falhou ({exc})")
-                    failures += 1
-                    if failures < ATTEMPTS_PER_SIZE:
-                        retry.append((context, lines, failures))
-                    elif len(lines) > 1:
-                        retry.extend((c, ls, 0) for c, ls in split_window(context, lines))
-            pending = retry
-        faithful = dict(translated)
-    else:
-        from transformers import MarianMTModel, MarianTokenizer
+    ordered = [line for job in jobs for line in job["lines"]]
+    texts = [line["text"] for line in ordered]
+    target_syllables = {line["id"]: line["target_syllables"] for line in ordered}
+    source_text = {line["id"]: line["text"] for line in ordered}
 
-        from packages.pipeline.translation import MT_BEAMS
+    started = time.time()
+    mt_tokenizer = MarianTokenizer.from_pretrained(language.mt_model)
+    # eager: a atenção otimizada (sdpa) não devolve os pesos usados no `split`.
+    # Em CPU levava ~30 s por Short (beam 8); na GPU, ~6 s.
+    mt_model = MarianMTModel.from_pretrained(
+        language.mt_model, attn_implementation="eager"
+    ).eval().to(device)
+    prefix_tokens = len(mt_tokenizer(language.mt_prefix.strip())["input_ids"]) - 1
 
-        started = time.time()
-        # Medido em CPU: ~30 s por Short (beam 8), mais lento que o Qwen na GPU.
-        mt_tokenizer = MarianTokenizer.from_pretrained(language.mt_model)
-        # eager: a atenção otimizada (sdpa) não devolve os pesos usados no `split`
-        mt_model = MarianMTModel.from_pretrained(
-            language.mt_model, attn_implementation="eager"
-        ).eval().to(device)
-        ordered = [line for job in jobs for line in job["lines"]]
-        texts = [line["text"] for line in ordered]
-        prefix_tokens = len(mt_tokenizer(language.mt_prefix.strip())["input_ids"]) - 1
-
-        def split(text: str, sources: list[str]) -> list[str]:
-            """Divide a tradução entre as falas pela atenção do próprio
-            tradutor (de qual palavra em inglês cada palavra traduzida veio);
-            proporção de caracteres só quando o alinhamento não fecha."""
-            if len(sources) == 1:
-                return [text]
-            src = mt_tokenizer(
-                language.mt_prefix + " ".join(sources), return_tensors="pt"
-            ).to(device)
-            tgt = mt_tokenizer(text_target=text, return_tensors="pt")["input_ids"].to(device)
-            with torch.no_grad():
-                attention = mt_model(**src, labels=tgt, output_attentions=True).cross_attentions
-            weights = torch.stack(attention).mean(dim=(0, 2))[0]  # (alvo, origem)
-            # fala de cada token de origem: conta os inícios de palavra ("▁")
-            bounds = list(itertools.accumulate(len(source.split()) for source in sources))
-            src_segment, word = [], -1
-            for k, token in enumerate(mt_tokenizer.convert_ids_to_tokens(src["input_ids"][0])):
-                inside = prefix_tokens <= k < src["input_ids"].shape[1] - 1
-                word += inside and token.startswith("▁")
-                src_segment.append(
-                    min(bisect.bisect_right(bounds, word), len(sources) - 1) if inside else -1
-                )
-            per_segment = torch.stack(
-                [weights[:, [s == k for s in src_segment]].sum(dim=1) for k in range(len(sources))],
-                dim=1,
-            )  # (alvo, falas)
-            word_scores: list[torch.Tensor] = []
-            for k, token in enumerate(mt_tokenizer.convert_ids_to_tokens(tgt[0])[:-1]):
-                if token.startswith("▁") or not word_scores:
-                    word_scores.append(per_segment[k].clone())
-                else:
-                    word_scores[-1] += per_segment[k]
-            labels = [int(scores.argmax()) for scores in word_scores]
-            return split_by_alignment(text, labels, len(sources)) or split_by_source(
-                text, sources
-            )
-
-        for group in sentence_groups(texts):
-            sources = [texts[i] for i in group]
-            sentences = split_sentences(" ".join(sources))
-            batch = mt_tokenizer(
-                [language.mt_prefix + sentence for sentence in sentences],
-                return_tensors="pt",
-                padding=True,
-            ).to(device)
-            with torch.no_grad():
-                out = mt_model.generate(
-                    **batch,
-                    num_beams=MT_BEAMS,
-                    num_return_sequences=MT_BEAMS,
-                    output_scores=True,
-                    return_dict_in_generate=True,
-                    max_new_tokens=256,
-                )
-            decoded = mt_tokenizer.batch_decode(out.sequences, skip_special_tokens=True)
-            scores = out.sequences_scores.tolist()
-            options = []
-            for k in range(len(sentences)):
-                beam = slice(k * MT_BEAMS, (k + 1) * MT_BEAMS)
-                options.append(
-                    mt_options(list(zip(decoded[beam], scores[beam], strict=True)), language)
-                )
-            ids = [ordered[i]["id"] for i in group]
-            budget = sum(target_syllables[i] for i in ids) * (1 + TOLERANCE_OFF_SCREEN)
-            best = " ".join(o[0][0] for o in options)
-            chosen = " ".join(choose_alternatives(options, budget, count))
-            for seg_id, fit, top in zip(
-                ids, split(chosen, sources), split(best, sources), strict=True
-            ):
-                if fit:
-                    translated[seg_id], faithful[seg_id] = fit, top or fit
-            print(f"[translate] opus {ids[0]}..{ids[-1]}: {chosen!r}")
-        print(f"[translate] opus: {time.time() - started:.1f}s")
-
-    # T0.30 passo 2: encurta só as falas acima do orçamento (+ tolerância).
-    # Fidelidade de cada candidato julgada pelo próprio Qwen já carregado:
-    # um forward pass (sem gerar texto) e a probabilidade de "YES" contra
-    # "NO". A fala fiel continua como 2º candidato pro editor.
-
-    def fidelity(source: str, candidates: list[str]) -> list[float]:
-        prompts = [chat(build_judge_prompt(source, c, language)) for c in candidates]
-        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+    def split(text: str, sources: list[str]) -> list[str]:
+        """Divide a tradução entre as falas pela atenção do próprio tradutor
+        (de qual palavra em inglês cada palavra traduzida veio); proporção de
+        caracteres só quando o alinhamento não fecha."""
+        if len(sources) == 1:
+            return [text]
+        src = mt_tokenizer(language.mt_prefix + " ".join(sources), return_tensors="pt").to(device)
+        tgt = mt_tokenizer(text_target=text, return_tensors="pt")["input_ids"].to(device)
         with torch.no_grad():
-            yes_no = [tokenizer.encode(w, add_special_tokens=False)[0] for w in ("YES", "NO")]
-            logits = model(**inputs).logits[:, -1, yes_no].float()
-        return torch.softmax(logits, dim=-1)[:, 0].tolist()
+            attention = mt_model(**src, labels=tgt, output_attentions=True).cross_attentions
+        weights = torch.stack(attention).mean(dim=(0, 2))[0]  # (alvo, origem)
+        # fala de cada token de origem: conta os inícios de palavra ("▁")
+        bounds = list(itertools.accumulate(len(source.split()) for source in sources))
+        src_segment, word = [], -1
+        for k, token in enumerate(mt_tokenizer.convert_ids_to_tokens(src["input_ids"][0])):
+            inside = prefix_tokens <= k < src["input_ids"].shape[1] - 1
+            word += inside and token.startswith("▁")
+            src_segment.append(
+                min(bisect.bisect_right(bounds, word), len(sources) - 1) if inside else -1
+            )
+        per_segment = torch.stack(
+            [weights[:, [s == k for s in src_segment]].sum(dim=1) for k in range(len(sources))],
+            dim=1,
+        )  # (alvo, falas)
+        word_scores: list[torch.Tensor] = []
+        for k, token in enumerate(mt_tokenizer.convert_ids_to_tokens(tgt[0])[:-1]):
+            if token.startswith("▁") or not word_scores:
+                word_scores.append(per_segment[k].clone())
+            else:
+                word_scores[-1] += per_segment[k]
+        labels = [int(scores.argmax()) for scores in word_scores]
+        return split_by_alignment(text, labels, len(sources)) or split_by_source(text, sources)
 
-    current = dict(translated)
-
-    def over_budget(seg_id: str) -> bool:
-        return count(current[seg_id]) > target_syllables[seg_id] * (1 + TOLERANCE_OFF_SCREEN)
-
-    order = [line["id"] for job in jobs for line in job["lines"]]
-    neighbors = {
-        seg_id: (order[i - 1] if i > 0 else None, order[i + 1] if i + 1 < len(order) else None)
-        for i, seg_id in enumerate(order)
-    }
-    queue = [seg_id for seg_id in current if over_budget(seg_id)] if engine != "opus" else []
-    if queue:
-        load_llm()
-    for round_number in range(1, SHORTEN_ROUNDS + 1):
-        if not queue:
-            break
-        print(f"[translate] encurtar rodada {round_number}: {len(queue)} falas acima do orçamento")
-        next_queue = []
-        for chunk_start in range(0, len(queue), BATCH_SIZE):
-            chunk = queue[chunk_start : chunk_start + BATCH_SIZE]
-            prompts = [
-                chat(
-                    build_shorten_prompt(
-                        source_text[s],
-                        current[s],
-                        target_syllables[s],
-                        language,
-                        previous_line=current.get(neighbors[s][0] or ""),
-                        next_line=current.get(neighbors[s][1] or ""),
-                    )
-                )
-                for s in chunk
-            ]
-            for seg_id, response in zip(chunk, generate_batch(prompts), strict=True):
-                try:
-                    options = parse_candidates(response, language)
-                except (ValueError, json.JSONDecodeError):
-                    continue
-                swearing = profanity_count(faithful[seg_id], language)
-                options = [
-                    o
-                    for o in options
-                    if not has_forbidden_word(o, language)
-                    and profanity_count(o, language) >= swearing
-                ]
-                if not options:
-                    continue
-                scores = fidelity(source_text[seg_id], options)
-                pick = choose_shortened(
-                    count(current[seg_id]),
-                    int(target_syllables[seg_id] * (1 - TOLERANCE_OFF_SCREEN)),
-                    [(o, count(o), f) for o, f in zip(options, scores, strict=True)],
-                )
-                print(f"[translate] {seg_id} fidelidade={[round(x, 2) for x in scores]} "
-                      f"opções={options} escolha={pick!r}")
-                if pick is None:
-                    continue
-                current[seg_id] = pick
-                if over_budget(seg_id):
-                    next_queue.append(seg_id)
-        queue = next_queue
+    chosen_by_id: dict[str, str] = {}
+    best_by_id: dict[str, str] = {}
+    for group in sentence_groups(texts):
+        sources = [texts[i] for i in group]
+        sentences = split_sentences(" ".join(sources))
+        batch = mt_tokenizer(
+            [language.mt_prefix + sentence for sentence in sentences],
+            return_tensors="pt",
+            padding=True,
+        ).to(device)
+        with torch.no_grad():
+            out = mt_model.generate(
+                **batch,
+                num_beams=MT_BEAMS,
+                num_return_sequences=MT_BEAMS,
+                output_scores=True,
+                return_dict_in_generate=True,
+                max_new_tokens=256,
+            )
+        decoded = mt_tokenizer.batch_decode(out.sequences, skip_special_tokens=True)
+        scores = out.sequences_scores.tolist()
+        options = []
+        for k in range(len(sentences)):
+            beam = slice(k * MT_BEAMS, (k + 1) * MT_BEAMS)
+            alternatives = list(zip(decoded[beam], scores[beam], strict=True))
+            options.append(mt_options(alternatives, language))
+        ids = [ordered[i]["id"] for i in group]
+        budget = sum(target_syllables[i] for i in ids) * (1 + TOLERANCE_OFF_SCREEN)
+        best = " ".join(o[0][0] for o in options)
+        chosen = " ".join(choose_alternatives(options, budget, count))
+        for seg_id, fit, top in zip(ids, split(chosen, sources), split(best, sources), strict=True):
+            if fit:
+                chosen_by_id[seg_id], best_by_id[seg_id] = fit, top or fit
+        print(f"[translate] {ids[0]}..{ids[-1]}: {chosen!r}")
+    print(f"[translate] {time.time() - started:.1f}s")
 
     def candidate(text: str, seg_id: str) -> dict:
         scored = score_candidate(text, target_syllables[seg_id], source_text[seg_id])
@@ -538,15 +319,14 @@ def cmd_translate(args: argparse.Namespace) -> None:
         }
 
     results = []
-    for job in jobs:
-        for line in job["lines"]:
-            seg_id = line["id"]
-            texts = [] if seg_id not in current else list(dict.fromkeys(
-                [current[seg_id], faithful[seg_id]]
-            ))
-            results.append(
-                {"id": seg_id, "candidates": [candidate(t, seg_id) for t in texts]}
-            )
+    for line in ordered:
+        seg_id = line["id"]
+        texts_for_seg = (
+            list(dict.fromkeys([chosen_by_id[seg_id], best_by_id[seg_id]]))
+            if seg_id in chosen_by_id
+            else []
+        )
+        results.append({"id": seg_id, "candidates": [candidate(t, seg_id) for t in texts_for_seg]})
 
     Path(args.output).write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
 

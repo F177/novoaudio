@@ -16,7 +16,7 @@ Config lida de variáveis de ambiente (ver `.env.example`):
     POD_PYTHON_ASR / POD_PYTHON_TTS (opcionais): caminho do interpretador
     de cada venv já preparado no Pod. `separate_stems`/`transcribe`/
     `translate`/`evaluate` usam o venv "asr" (Demucs, WhisperX, pyannote,
-    faster-whisper e também Qwen2.5 — `transformers` dessa venv já
+    faster-whisper e também OPUS-MT — `transformers` dessa venv já
     suporta a arquitetura `qwen2`, confirmado antes de rodar de verdade);
     `synthesize` usa o venv "tts" (MOSS-TTS, que pede um torch mais novo
     e incompatível com o resto). Sem essas variáveis, cai no caminho

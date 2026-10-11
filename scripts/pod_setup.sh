@@ -13,7 +13,8 @@ setup_asr() {
   python3.11 -m venv /root/venvs/asr
   local pip=/root/venvs/asr/bin/pip
   $pip install -q torch==2.8.0 torchaudio==2.8.0 --index-url $CU128
-  $pip install -q whisperx demucs transformers accelerate soundfile funasr modelscope faster-whisper \n    sentencepiece sacremoses
+  $pip install -q whisperx demucs transformers accelerate soundfile funasr modelscope faster-whisper \
+    sentencepiece sacremoses
   # whisperx/funasr sobem o torch por baixo dos panos — refixa.
   $pip install -q torch==2.8.0 torchaudio==2.8.0 --index-url $CU128
   $pip check

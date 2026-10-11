@@ -1,0 +1,68 @@
+{
+  "par": "en-pt-BR",
+  "idioma_fonte": "en",
+  "idioma_alvo": "pt-BR",
+  "nota": "Conjunto fixo de avaliação do ciclo de qualidade. 'video' é o nome do diretório em .cache/dub/; 'fonte' é o argumento de scripts/dub.py. Splits: 'dev' (o analista vê), 'holdout' (aceite de cada ciclo; analista e implementador não veem), 'exame' (selado, só em marcos com /ciclo marco). Preencha 'categoria'. Com 20 Shorts: ~12 dev, ~5 holdout, ~3 exame. Shorts novos, de preferência amostrados do que clippers realmente sobem, entram no holdout ou no exame; holdout gasto pode virar dev; nunca o contrário.",
+  "elegibilidade": {
+    "min_shorts": 3,
+    "min_categorias": 2
+  },
+  "calibracao": {
+    "min_n": 5,
+    "min_precisao": 0.7,
+    "min_recall": 0.6,
+    "ruido_padrao": 0.15
+  },
+  "aceite": {
+    "tolerancia_abs": 1,
+    "tolerancia_rel": 0.1,
+    "cer_final_margem": 0.02,
+    "descarte_margem_rel": 0.1,
+    "custo_margem_rel": 0.1,
+    "custo_margem_abs_s": 2.0
+  },
+  "higiene": {
+    "max_usos_holdout": 8
+  },
+  "shorts": [
+    {
+      "video": "streamer-divida",
+      "fonte": "videos/streamer-divida.mp4",
+      "categoria": "streamer",
+      "tags": [
+        "dialogo-rapido",
+        "2-locutores",
+        "palavrao"
+      ],
+      "split": "dev"
+    },
+    {
+      "video": "mcconaughey-ironia",
+      "fonte": null,
+      "categoria": null,
+      "tags": [],
+      "split": "dev"
+    },
+    {
+      "video": "jay-shetty-fortes-fracos",
+      "fonte": null,
+      "categoria": null,
+      "tags": [],
+      "split": "dev"
+    },
+    {
+      "video": "poder-da-calma",
+      "fonte": null,
+      "categoria": null,
+      "tags": [],
+      "split": "dev"
+    },
+    {
+      "video": "christian-bale-citacao",
+      "fonte": null,
+      "categoria": null,
+      "tags": [],
+      "split": "dev"
+    }
+  ]
+}

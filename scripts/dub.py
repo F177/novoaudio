@@ -515,15 +515,36 @@ def update_dashboard(
     return dashboard_path
 
 
+STAGE_TIMINGS_FILE = "stage_timings.json"
+
+
 @contextmanager
-def _timed_stage(name: str):
+def _timed_stage(name: str, cache_dir: Path | None = None):
     """Mede e imprime o tempo de cada etapa remota — pedido explícito do
     usuário (2026-09-18) pra ter dado real de onde o tempo vai, em vez de
-    suposição, antes de otimizar velocidade."""
+    suposição, antes de otimizar velocidade.
+
+    Com `cache_dir`, grava o tempo em `stage_timings.json`. Só etapa que
+    rodou de verdade passa por aqui; etapa reaproveitada do cache mantém o
+    tempo da última execução real, então a soma estima o custo de uma
+    execução fria do código atual (portão de custo do ciclo de qualidade).
+    """
     start = time.monotonic()
     yield
     elapsed = time.monotonic() - start
     print(f"[timing] {name}: {elapsed:.1f}s", flush=True)
+    if cache_dir is not None:
+        _record_stage_timing(cache_dir, name, elapsed)
+
+
+def _record_stage_timing(cache_dir: Path, name: str, elapsed: float) -> None:
+    path = cache_dir / STAGE_TIMINGS_FILE
+    try:
+        timings = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except json.JSONDecodeError:
+        timings = {}
+    timings[name] = round(elapsed, 2)
+    path.write_text(json.dumps(timings, indent=2), encoding="utf-8")
 
 
 VOICE_BANK_MANIFEST = Path("assets/voices/bank/voices.json")
@@ -608,7 +629,7 @@ def run_pipeline(
     vocals_path = cached("vocals.wav")
     separate_stems_hash = _hash_file(audio_path)
     if needs_stage(background_path, "separate_stems", separate_stems_hash):
-        with _timed_stage("separate_stems"):
+        with _timed_stage("separate_stems", cache_dir):
             upload_to_pod(pod, str(audio_path), f"{remote_job_dir}/audio.wav")
             run_on_pod(
                 pod,
@@ -629,7 +650,7 @@ def run_pipeline(
     transcript_path = cached("transcript.json")
     transcribe_hash = _hash_file(vocals_path)
     if needs_stage(transcript_path, "transcribe", transcribe_hash):
-        with _timed_stage("transcribe"):
+        with _timed_stage("transcribe", cache_dir):
             run_on_pod(
                 pod,
                 f"{pod.python_asr} -m scripts.pod_worker transcribe "
@@ -702,7 +723,7 @@ def run_pipeline(
         (cache_dir / "translate_jobs.json").write_text(
             json.dumps(translate_jobs, ensure_ascii=False), encoding="utf-8"
         )
-        with _timed_stage("translate"):
+        with _timed_stage("translate", cache_dir):
             upload_to_pod(
                 pod,
                 str(cache_dir / "translate_jobs.json"),
@@ -774,7 +795,7 @@ def run_pipeline(
         (cache_dir / "synth_jobs.json").write_text(
             json.dumps(synth_jobs, ensure_ascii=False), encoding="utf-8"
         )
-        with _timed_stage("synthesize"):
+        with _timed_stage("synthesize", cache_dir):
             upload_to_pod(
                 pod, str(cache_dir / "synth_jobs.json"), f"{remote_job_dir}/synth_jobs.json"
             )
@@ -808,7 +829,7 @@ def run_pipeline(
         (cache_dir / "eval_jobs.json").write_text(
             json.dumps(eval_jobs, ensure_ascii=False), encoding="utf-8"
         )
-        with _timed_stage("evaluate"):
+        with _timed_stage("evaluate", cache_dir):
             upload_to_pod(
                 pod, str(cache_dir / "eval_jobs.json"), f"{remote_job_dir}/eval_jobs.json"
             )
@@ -1101,7 +1122,7 @@ def run_pipeline(
         final_segments_dir.mkdir(parents=True, exist_ok=True)
         for seg_id, seg_audio, seg_sr in final_audio_by_seg:
             sf.write(final_segments_dir / f"{seg_id}.wav", seg_audio, seg_sr)
-        with _timed_stage("upload_final_segments"):
+        with _timed_stage("upload_final_segments", cache_dir):
             upload_to_pod(pod, str(final_segments_dir), f"{remote_job_dir}/final_segments")
 
         # --- auditoria final (remoto, Whisper large-v3 via cmd_evaluate) —
@@ -1127,7 +1148,7 @@ def run_pipeline(
             sf.write(
                 final_mixed_segments_dir / f"{seg_id}.wav", mixed_segment_audio, SYNTH_SAMPLE_RATE
             )
-        with _timed_stage("upload_final_mixed_segments"):
+        with _timed_stage("upload_final_mixed_segments", cache_dir):
             upload_to_pod(
                 pod, str(final_mixed_segments_dir), f"{remote_job_dir}/final_mixed_segments"
             )
@@ -1140,7 +1161,7 @@ def run_pipeline(
             json.dumps(final_cer_jobs, ensure_ascii=False), encoding="utf-8"
         )
         final_cer_path = cached("final_cer.json")
-        with _timed_stage("evaluate_final"):
+        with _timed_stage("evaluate_final", cache_dir):
             upload_to_pod(
                 pod,
                 str(cache_dir / "final_cer_jobs.json"),
@@ -1211,7 +1232,7 @@ def run_pipeline(
                 json.dumps(emotion_jobs, ensure_ascii=False), encoding="utf-8"
             )
             emotion_path = cached("emotion.json")
-            with _timed_stage("match_emotion"):
+            with _timed_stage("match_emotion", cache_dir):
                 upload_to_pod(
                     pod,
                     str(cache_dir / "emotion_jobs.json"),

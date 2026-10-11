@@ -1,0 +1,27 @@
+{
+  "versao": 1,
+  "nota": "Classes de falha independentes de idioma. O perfil do idioma (evals/languages/<codigo>.md) dá exemplos por classe. Classe nova só entra aqui com aprovação humana, quando 'outro' se repetir.",
+  "motivos": ["tradução", "corte", "voz", "emoção", "pronúncia", "timing"],
+  "estagios": ["separação", "ASR", "diarização", "segmentação", "tradução", "texto→TTS", "vozes", "síntese", "montagem"],
+  "classes": {
+    "sentido.pessoa_sujeito": {"motivo": "tradução", "estagio": "tradução", "descricao": "Pessoa, sujeito ou referente trocado: muda quem faz o quê a quem."},
+    "sentido.omissao": {"motivo": "tradução", "estagio": "tradução", "descricao": "Conteúdo do original some na tradução."},
+    "sentido.acrescimo": {"motivo": "tradução", "estagio": "tradução", "descricao": "Tradução acrescenta conteúdo que não está no original."},
+    "sentido.literal": {"motivo": "tradução", "estagio": "tradução", "descricao": "Tradução palavra por palavra que muda ou apaga o sentido (expressão idiomática, verbo com acepção errada)."},
+    "sentido.numero_nome": {"motivo": "tradução", "estagio": "tradução", "descricao": "Número, valor, unidade ou nome próprio errado."},
+    "registro.formal_demais": {"motivo": "tradução", "estagio": "tradução", "descricao": "Soa escrito ou formal, não como fala do idioma-alvo."},
+    "registro.variante": {"motivo": "tradução", "estagio": "tradução", "descricao": "Forma de outra variante do idioma (ex.: europeia num alvo brasileiro)."},
+    "tom.suavizado": {"motivo": "tradução", "estagio": "tradução", "descricao": "Palavrão, gíria ou agressividade suavizados em relação ao original."},
+    "concordancia.genero": {"motivo": "tradução", "estagio": "tradução", "descricao": "Gênero ou concordância errados para quem fala ou de quem se fala."},
+    "borda.frase_partida": {"motivo": "tradução", "estagio": "segmentação", "descricao": "Frase partida entre segmentos que não faz sentido lida junta."},
+    "corte.fala_perdida": {"motivo": "corte", "estagio": "montagem", "descricao": "Palavras da tradução somem no áudio entregue."},
+    "timing.ritmo": {"motivo": "timing", "estagio": "síntese", "descricao": "Fala apressada ou arrastada demais para o trecho."},
+    "voz.genero_idade": {"motivo": "voz", "estagio": "vozes", "descricao": "Voz de gênero ou idade incompatível com o locutor."},
+    "voz.compartilhada": {"motivo": "voz", "estagio": "diarização", "descricao": "Dois locutores com a mesma voz, ou um segmento com falas de dois locutores."},
+    "voz.instavel": {"motivo": "voz", "estagio": "síntese", "descricao": "A voz do mesmo locutor muda entre segmentos."},
+    "entonacao.pergunta": {"motivo": "emoção", "estagio": "síntese", "descricao": "Pergunta que soa como afirmação, ou o contrário."},
+    "emocao.achatada": {"motivo": "emoção", "estagio": "síntese", "descricao": "Entrega plana onde o original tem energia ou emoção."},
+    "pronuncia.termo": {"motivo": "pronúncia", "estagio": "texto→TTS", "descricao": "Nome, sigla, número ou palavra estrangeira mal pronunciados."},
+    "outro": {"motivo": null, "estagio": null, "descricao": "Não cabe em nenhuma classe; descreva na evidência. O analista propõe classe nova se repetir."}
+  }
+}

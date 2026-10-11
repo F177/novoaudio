@@ -1,0 +1,14 @@
+{
+  "codigo": "pt-BR",
+  "nome": "português brasileiro",
+  "perfil_juiz": "evals/languages/pt-BR.md",
+  "perguntas": {
+    "polar_marcada_por_entonacao": true,
+    "inicio_interrogativo": [
+      "o que", "o quê", "por que", "porque", "por quê", "pra que", "para que", "do que",
+      "de que", "em que", "com quem", "pra quem", "para quem", "de quem", "que", "quê",
+      "quem", "quanto", "quanta", "quantos", "quantas", "como", "onde", "aonde", "quando",
+      "qual", "quais", "cadê"
+    ]
+  }
+}

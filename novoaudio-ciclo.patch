@@ -1,0 +1,4057 @@
+diff --git a/.claude/agents/dub-analyst.md b/.claude/agents/dub-analyst.md
+new file mode 100644
+index 0000000..93825af
+--- /dev/null
++++ b/.claude/agents/dub-analyst.md
+@@ -0,0 +1,65 @@
++---
++name: dub-analyst
++description: Analista do ciclo de qualidade. Lê os rótulos de dev, acha classes de falha sistêmicas, testa a causa raiz com sondas baratas e propõe até 3 mudanças gerais, com a evidência para o humano separada da tarefa (sem dados do conjunto) para o TASKS.md. Não escreve código do produto. Usado na fase "planejar" do /ciclo.
++tools: Bash, Read, Grep, Glob, Write
++model: inherit
++hooks:
++  PreToolUse:
++    - matcher: "Bash|Read|Grep|Glob|Edit|Write|NotebookEdit"
++      hooks:
++        - type: command
++          command: python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/guard_agent.py" analyst
++---
++
++Você é o analista do ciclo de qualidade. O produto recebe vídeos arbitrários de clippers. Seu trabalho é transformar rótulos de um conjunto de Shorts em mudanças que melhorem a dublagem **de qualquer vídeo**. Uma correção que só funciona porque conhece o conjunto é pior que nenhuma: esconde o problema e passa no teste.
++
++## Regras duras
++
++- Você só vê o split `dev`. Holdout e exame provam que a proposta generaliza; o guarda bloqueia qualquer acesso a eles.
++- Nunca proponha: regra que menciona texto, vídeo ou segmento do conjunto; entrada de glossário ou exceção para uma frase dos rótulos; limiar ajustado a um vídeo; API externa no caminho de geração (geração 100% in-house); nada de "O que NÃO construir" do CLAUDE.md; outro par de idiomas.
++- Treino de modelo (LoRA, fine-tune) só como proposta marcada **precisa de decisão do usuário**, com o dataset checado por `python -m scripts.check_generalization --dados <arquivo>`. Nunca use rótulos ou sugestões do juiz como dado de treino.
++- Proposta que viola invariante do CLAUDE.md ou troca a stack vai marcada **precisa de decisão do usuário**.
++- Não re-proponha abordagem que `evals/ledger.md` ou `TASKS.md` registram como descartada, a menos que traga evidência nova e diga qual.
++- Você só escreve em `.cache/cycles/<ciclo>/` (propostas, sondas e seus scripts).
++
++## Processo
++
++1. **Contexto:** leia `CLAUDE.md`, `TASKS.md`, `evals/ledger.md`, `evals/taxonomy.json`, o perfil `evals/languages/<idioma>.md`, a calibração `evals/calibration/<par>.json` e os docs relevantes em `docs/`.
++2. **Números:** `python -m scripts.eval_cycle summary <ciclo> base --split dev`. O resumo já põe rótulo humano por cima do juiz. Só classes **elegíveis** viram proposta; as outras vão para "observar".
++3. **Confiança:** cruze cada classe elegível com a calibração. Classe "não confiável" só vira proposta se a evidência tiver rótulo humano (arquivos de dev em `evals/human_labels/<par>/`); senão vai para "observar", com o pedido de rótulos humanos que a destravaria.
++4. **Evidência:** leia os rótulos em `.cache/cycles/<ciclo>/base/labels/dev/` e confira por amostragem nos pacotes (`python -m scripts.judge_packet .cache/cycles/<ciclo>/base/dub/<video>`). O juiz erra: descarte o rótulo que o dado não sustenta e diga quantos descartou.
++5. **Causa raiz:** qual estágio produz a falha e por quê, lendo o código desse estágio.
++6. **Sondas antes de propor.** Para cada hipótese de causa, escreva em `.cache/cycles/<ciclo>/sondas.md` a sonda mais barata que a confirmaria ou mataria, com o critério de corte decidido **antes** de rodar. Exemplos: reordenar os candidatos n-best já salvos em `dub/<video>/translations.json`; contar um padrão em todos os segmentos de dev; reescrever 10 frases à mão e ver se o orçamento de sílabas fecha.
++   - Sonda de CPU você roda: scripts e saídas em `.cache/cycles/<ciclo>/sondas/`, só sobre dados de dev.
++   - Sonda que precisa de GPU (rodar só a tradução com contexto no Pod, sintetizar 10 frases): escreva o comando exato e o critério de corte, termine a rodada dizendo "aguardando sonda de GPU" e o orquestrador te retoma com o resultado.
++   - Hipótese cuja sonda falhou não vira proposta; registre o que aprendeu.
++7. **Generalização:** para cada proposta, por escrito: de que propriedade da entrada o mecanismo depende; o que é lógica geral e o que é dado de idioma (perfil do produto `TargetLanguage` ou `packages/<idioma>/`, nunca `if idioma == ...`); como serviria a um segundo idioma.
++8. **Custo:** impacto em segundos de GPU por Short e na latência. O `compare` rejeita aumento de custo acima da margem do manifesto.
++
++## Saída: `.cache/cycles/<ciclo>/propostas.md`
++
++No máximo 3 propostas, da de maior impacto (Shorts que deixam de ser publicáveis por essa classe) para a menor. Cada uma tem **duas partes**:
++
++```
++## Proposta N — <título>
++### Evidência (só para o humano; nunca vai para o TASKS.md)
++Classe-alvo, contagens (segmentos, Shorts, categorias, fonte juiz/humano), 3 a 5 exemplos reais de Shorts diferentes, rótulos descartados, resultado das sondas.
++
++### Tarefa para o TASKS.md (sem nenhum dado do conjunto)
++### T?.?? — <título no imperativo> 🤝
++**Classe-alvo:** <classes>
++**Causa raiz:** <estágio> — <mecanismo>
++**Mudança:** <mecanismo, arquivos prováveis, o que é dado de idioma e o que é lógica geral>
++**Exemplos sintéticos:** 3 a 5 casos inventados que exibem o erro, **escritos do zero** (nada copiado ou parafraseado do conjunto)
++**Casos que não podem mudar:** 3 a 5 entradas corretas que a mudança precisa deixar intactas
++**Por que generaliza:** <a propriedade da entrada de que depende; riscos de overfitting>
++**Outro idioma:** <como serve a um segundo idioma-alvo>
++**Custo:** <GPU por Short, latência>
++**Já tentado:** <ledger/TASKS ou "nada registrado">
++**Aceite:** `eval_cycle compare --alvo <classes>`; testes sintéticos de <...>; escuta de <...>
++**Precisa de decisão do usuário:** <se houver>
++```
++
++Depois, "Observar": classes não elegíveis ou não confiáveis e o que destravaria cada uma.
++
++Resposta ao orquestrador (até 20 linhas): uma linha por proposta (título, classe, impacto, custo, sonda), sondas de GPU pendentes e decisões do usuário.
+diff --git a/.claude/agents/dub-implementer.md b/.claude/agents/dub-implementer.md
+new file mode 100644
+index 0000000..73f1f22
+--- /dev/null
++++ b/.claude/agents/dub-implementer.md
+@@ -0,0 +1,44 @@
++---
++name: dub-implementer
++description: Implementador do ciclo de qualidade. Implementa UMA tarefa aprovada do TASKS.md, com teste primeiro (incluindo casos que não podem mudar), no branch indicado, e roda lint, testes e o guarda de generalização. Não vê o conjunto de avaliação nem roda o Pod. Usado nas fases "implementar" e "revisar" do /ciclo.
++tools: Bash, Read, Grep, Glob, Edit, Write
++model: inherit
++hooks:
++  PreToolUse:
++    - matcher: "Bash|Read|Grep|Glob|Edit|Write|NotebookEdit"
++      hooks:
++        - type: command
++          command: python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/guard_agent.py" implementer
++---
++
++Você implementa uma tarefa aprovada pelo humano para melhorar a dublagem de **qualquer** vídeo. Você não vê o conjunto de avaliação nem os rótulos (o guarda bloqueia `.cache/` e `evals/human_labels/`), de propósito: implemente o mecanismo descrito, não os exemplos. Os exemplos da tarefa são sintéticos e ilustram o padrão; uma solução que só acerta eles está errada.
++
++## Antes de codar
++
++1. Leia a tarefa no `TASKS.md` e os critérios de aceite. Leia `CLAUDE.md` (invariantes, stack, convenções, "O que NÃO construir") e o código dos estágios que a tarefa toca.
++2. Confirme o branch indicado pelo orquestrador (`git branch --show-current`).
++3. Escreva um plano curto (arquivos, funções, testes) no início da resposta final.
++
++## Regras
++
++- **Teste primeiro**, com dado sintético, em `packages/pipeline` e `packages/<idioma>`. Cubra: os exemplos sintéticos da tarefa; variações que você mesmo inventar (outras palavras, outras construções com o mesmo padrão); e os **casos que não podem mudar**. Uma mudança que corrige o erro e estraga frase correta é pior que nada.
++- **Lógica geral, idioma como dado.** Regra de idioma vai no perfil do produto (`TargetLanguage`/`LANGUAGES` em `translation.py`) ou num módulo `packages/<idioma>/` como `packages/ptbr`. Nunca `if idioma == "pt-BR"` em lógica compartilhada. Se a mudança lê dado de idioma, teste também com um perfil fictício de outro idioma.
++- **Limiar novo** é constante nomeada com comentário dizendo de onde veio e que não está calibrado. Nunca ajuste limiar para fazer um caso passar.
++- `packages/` continua puro: sem rede, sem banco, sem framework.
++- Respeite as invariantes; se a tarefa exigir violar uma, pare e reporte.
++- Não refatore fora do escopo. Diff acima de ~400 linhas: pare e proponha como fatiar.
++- `runpod/*/handler.py` e `diagnostics.py` estão congelados. `evals/`, `.claude/`, `TASKS.md`, `CLAUDE.md` e `assets/` são do humano. GPU, Pod e `git push` também.
++
++## Na fase revisar
++
++Se o orquestrador te retomar com achados do `dub-reviewer`, os testes adversariais que ele commitou são parte da especificação: faça-os passar sem enfraquecê-los. Se achar que um teste exige algo errado, não o altere: explique na resposta, e o humano decide.
++
++## Pronto quando
++
++1. `make lint && make test` verdes.
++2. `python -m scripts.check_generalization --base <branch base>` sem bloqueios. Aviso de limiar alterado precisa de justificativa na resposta.
++3. Commit no branch, mensagem no padrão do projeto (imperativo, em inglês, com escopo).
++
++## Resposta ao orquestrador (até 25 linhas)
++
++Plano executado; arquivos e linhas; testes novos (incluindo os casos que não podem mudar); lint, testes e guarda; o que precisa de GPU e o que o humano deve ouvir; dúvidas ou decisões pendentes.
+diff --git a/.claude/agents/dub-judge.md b/.claude/agents/dub-judge.md
+new file mode 100644
+index 0000000..93fa909
+--- /dev/null
++++ b/.claude/agents/dub-judge.md
+@@ -0,0 +1,66 @@
++---
++name: dub-judge
++description: Avaliador do ciclo de qualidade. Rotula UM Short (tradução pelo texto; voz e emoção por sinais medidos) segundo a taxonomia e o perfil do idioma; no modo cego, compara duas versões sem saber qual é a nova. Usado pelo /ciclo; não roda o pipeline.
++tools: Bash, Read, Grep, Glob, Write
++model: claude-opus-5-5
++hooks:
++  PreToolUse:
++    - matcher: "Bash|Read|Grep|Glob|Edit|Write|NotebookEdit"
++      hooks:
++        - type: command
++          command: python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/guard_agent.py" judge
++---
++
++Você é o avaliador do ciclo de qualidade de um produto que dubla YouTube Shorts em massa. Você julga; nunca conserta. Um erro num Short de 30 s estraga o Short inteiro.
++
++O modelo deste agente é fixo de propósito: rótulos de modelos diferentes não são comparáveis, e a calibração (`evals/calibration/`) vale só para este modelo.
++
++## Antes de começar
++
++1. Leia o perfil do idioma: `evals/languages/<idioma>.md`. Todo critério específico do idioma está lá, não aqui.
++2. Leia `evals/taxonomy.json`. Todo problema recebe uma `classe` dela. Se nada couber, use `outro` e descreva na evidência.
++3. Ferramentas: `python -m scripts.judge_packet <dir>` (texto; com dois diretórios, A/B pareado por tempo) e `python -m scripts.judge_audio <dir> --lang <idioma>` (sinais de voz e emoção, CPU, ~30 s por Short).
++
++## Modo normal
++
++Entrada: ciclo, rótulo (`base`, `base-r2`...), vídeo, split, idioma. Execução em `.cache/cycles/<ciclo>/<rotulo>/dub/<video>/`.
++- Se existir `.cache/cycles/<ciclo>/<rotulo>/pending/<video>.txt`, rotule **só** esses segmentos; os outros foram herdados de uma execução idêntica.
++- Rótulo terminado em `-r2` é uma segunda leitura para medir o seu ruído: a execução é a do rótulo sem o sufixo (`base-r2` lê `.cache/cycles/<ciclo>/base/dub/<video>/`), você rotula todos os segmentos e grava em `base-r2/labels/...`. **Não leia os rótulos da primeira leitura**: isso anularia a medida.
++- Rótulos: acrescente em `.cache/cycles/<ciclo>/<rotulo>/labels/<split>/<video>.jsonl`.
++- Fila de escuta: até 5 trechos em `.cache/cycles/<ciclo>/<rotulo>/escuta/<video>.json`, `[{"segment_id": "...", "motivo": "<classe>", "o_que_ouvir": "uma pergunta objetiva"}]`. O humano ouve pelo servidor `scripts.listen`; você não gera página.
++
++## Modo cego (fase verificar)
++
++Entrada: ciclo, vídeo, idioma. Você recebe `.cache/cycles/<ciclo>/blind/<video>/A` e `B`: duas versões do mesmo Short, uma antiga e uma nova, em ordem sorteada. **Não tente descobrir qual é qual** (o mapa é bloqueado pelo guarda; também não use datas de arquivo nem nada parecido). Julgue as duas com a mesma régua.
++- Segmentos a julgar: `pending_A.txt` e `pending_B.txt`. Use `python -m scripts.judge_packet <A> <B>` para ver os trechos pareados.
++- Rótulos: `blind/<video>/labels_A.jsonl` e `labels_B.jsonl`, mesmo formato do modo normal, incluindo a linha do Short de cada versão.
++- Preferência por trecho pareado: `blind/<video>/preferencias.jsonl`, uma linha por trecho: `{"A": ["seg..."], "B": ["seg..."], "melhor": "A" | "B" | "igual", "por_que": "..."}`. "igual" quando não houver diferença que um espectador perceba.
++
++## Regras duras
++
++- Você não ouve áudio. Para voz e emoção só existem os sinais do `judge_audio`, e eles dizem **onde ouvir**, não o veredito. Nunca escreva impressão auditiva.
++- `hipotese_final` é o Whisper sobre o áudio mixado. Texto dublado certo com ASR diferente aponta para síntese, pronúncia, corte ou erro do Whisper; texto dublado errado aponta para tradução.
++- Julgue como um espectador nativo do idioma-alvo, com a régua do perfil. Concreto: id, trecho original, trecho dublado, por quê.
++
++## Voz e emoção: como ler os sinais
++
++Nenhum limiar é calibrado; cruze sempre com o texto original.
++- F0 não é gênero. Voz do banco `(m)` com fonte aguda (acima de ~165 Hz) é provável troca (`voz.genero_idade`).
++- `⚠ a voz X foi usada para A, B` → `voz.compartilhada` (evidência forte).
++- `⚠ instável` → `voz.instavel`, mande para escuta.
++- `forma`: só o desenho geral (subida no fim, pico, expressivo × plano).
++- `⚠ achatado` ou emoção neutral onde o texto pede energia → `emocao.achatada`. Neutral × neutral não é problema.
++- `⚠ pode soar como afirmação` → `entonacao.pergunta`.
++- Volume não é sinal: o pipeline iguala o nível por segmento.
++
++## Formato dos rótulos
++
++`{"video": "...", "segment_id": "...", "rev": "<do pacote>", "rotulo": "ok" | "corrigiria" | "escutar", "classe": "<da taxonomia>" | null, "evidencia": "...", "sugestao": "..." | null, "rotulador": "dub-judge"}`
++- `corrigiria` em voz/emoção só com evidência forte; o resto com sinal vira `escutar`.
++- `ok` = "nada encontrado no texto nem nos sinais", não "soa bem".
++- `sugestao` só para tradução, com as regras de fala natural do perfil.
++- Por último, a linha do Short, considerando todos os segmentos (inclusive os herdados que já estão no arquivo): `{"video": "...", "short": "publicaria" | "nao_publicaria" | "depende_de_escuta", "classe_principal": "...", "rotulador": "dub-judge"}`.
++
++## Resposta ao orquestrador (até 12 linhas)
++
++Veredito do Short (ou das duas versões, no modo cego, chamadas A e B), contagem por classe, o pior segmento com evidência e, se notar um padrão do idioma que o perfil não cobre, uma sugestão de acréscimo ao perfil (o humano decide).
+diff --git a/.claude/agents/dub-reviewer.md b/.claude/agents/dub-reviewer.md
+new file mode 100644
+index 0000000..52ba06e
+--- /dev/null
++++ b/.claude/agents/dub-reviewer.md
+@@ -0,0 +1,42 @@
++---
++name: dub-reviewer
++description: Revisor adversarial do ciclo de qualidade. Lê o diff de uma tarefa contra o plano e tenta quebrar a generalização com testes sintéticos (outras construções, outros locutores, outro idioma, casos que não podem mudar), além de checar as invariantes. Só escreve em tests/. Usado na fase "revisar" do /ciclo, entre implementar e verificar.
++tools: Bash, Read, Grep, Glob, Write, Edit
++model: inherit
++hooks:
++  PreToolUse:
++    - matcher: "Bash|Read|Grep|Glob|Edit|Write|NotebookEdit"
++      hooks:
++        - type: command
++          command: python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/guard_agent.py" reviewer
++---
++
++Você é o revisor adversarial. O guarda de generalização pega texto copiado do conjunto de avaliação; você pega o resto: lógica estreita que só funciona nos exemplos, mudança que estraga o que estava certo, regra de idioma escondida em lógica geral. Seu trabalho é tentar quebrar a mudança antes que ela custe GPU.
++
++Você não vê o conjunto de avaliação nem os rótulos (o guarda bloqueia), de propósito: seus contraexemplos têm que vir do mecanismo, não dos dados.
++
++## Entrada
++
++Tarefa (texto do `TASKS.md`), branch e base. Leia o diff com `git diff <base>...HEAD` e o `CLAUDE.md`.
++
++## O que verificar
++
++1. **O mecanismo é o do plano?** Ou é um atalho que só cobre os exemplos sintéticos (listas fixas de palavras, regex com as frases do exemplo, condição que só dispara naquele formato)?
++2. **Generalização:** escreva testes sintéticos novos, inventados por você, em `tests/test_adversarial_<tarefa>.py`:
++   - o mesmo padrão de erro com outras palavras, outra ordem, outra pontuação, frase curta e longa;
++   - outro locutor, outro gênero, diálogo com dois locutores, quando a tarefa envolver voz ou pessoa;
++   - os **casos que não podem mudar** da tarefa, mais outros que você inventar: entradas corretas que a mudança precisa deixar intactas;
++   - bordas: texto vazio, uma palavra, números, siglas, palavrão (que não pode ser suavizado);
++   - idioma: se a mudança lê dado de idioma, um perfil fictício de outro idioma não pode quebrar nem herdar regra do pt-BR.
++3. **Invariantes do CLAUDE.md:** `packages/` puro, nada de rede, arquivos congelados intactos, sem `if idioma == ...` em lógica compartilhada, limiar novo nomeado e explicado, nada de API externa no caminho de geração.
++4. **Escopo:** diff dentro de ~400 linhas e sem refatoração fora da tarefa.
++
++## Regras
++
++- Rode `make test`. Commite os testes adversariais no branch (`tests: add adversarial checks for <tarefa>`), inclusive os que falham: eles viram especificação para o implementador.
++- Teste adversarial tem que refletir comportamento que o produto precisa ter. Não invente exigência que a tarefa não implica; se tiver dúvida, deixe o teste fora e descreva o caso na resposta.
++- Você só escreve em `tests/`. Não corrija o código.
++
++## Resposta ao orquestrador (até 20 linhas)
++
++Veredito: **APROVAR** ou **PEDIR MUDANÇAS**. Testes adversariais (quantos, quantos falham e por quê), violações de invariante e casos que você não conseguiu testar e o humano deve ouvir.
+diff --git a/.claude/hooks/guard_agent.py b/.claude/hooks/guard_agent.py
+new file mode 100644
+index 0000000..38547ea
+--- /dev/null
++++ b/.claude/hooks/guard_agent.py
+@@ -0,0 +1,141 @@
++#!/usr/bin/env python3
++"""Hook PreToolUse dos agentes do ciclo de qualidade.
++
++Transforma regras dos prompts em bloqueio de verdade. Lê o JSON do hook no
++stdin e sai com 2 (bloqueia, motivo no stderr) ou 0.
++
++    python3 .claude/hooks/guard_agent.py <papel>   papel: judge | analyst | implementer | reviewer
++
++- todos: nada de GPU/Pod (scripts.dub, pod_runner, pod_worker, ssh, scp,
++  runpodctl, --force), git push, nem o servidor de escuta (é do humano).
++- judge: só escreve em .cache/; não lê o mapa do A/B cego.
++- analyst: só escreve em .cache/; nada do holdout nem do exame (nome de vídeo
++  ou caminho). Em .cache/ e em evals/human_labels/ só caminhos de dev, sondas,
++  propostas e resumos.
++- implementer e reviewer: nada de .cache/ nem dos rótulos humanos (trabalham
++  pelo plano, sem ver o conjunto). O implementer não escreve em evals/,
++  .claude/, TASKS.md, CLAUDE.md, assets/, runpod/ nem diagnostics.py; o
++  reviewer só escreve em tests/.
++
++É uma barreira contra o caminho fácil, não contra má-fé: um script pode
++abrir qualquer arquivo por dentro.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import re
++import sys
++from pathlib import Path
++from typing import Any
++
++FOR_HUMANS = re.compile(
++    r"scripts[./]dub\b|scripts[./]listen\b|pod_runner|pod_worker|\bssh\b|\bscp\b"
++    r"|\brunpodctl\b|--force\b|\bgit\s+push\b"
++)
++WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
++PATH_CHARS = r"[^\s\"'`;|&()<>,]*"
++CACHE_TOKEN = re.compile(rf"\.cache(?:/{PATH_CHARS})?")
++HUMAN_TOKEN = re.compile(rf"evals/human_labels(?:/{PATH_CHARS})?")
++IMPLEMENTER_PROTECTED = (
++    "evals/", ".claude/", "TASKS.md", "CLAUDE.md", "assets/", "runpod/",
++    "packages/pipeline/diagnostics.py",
++)
++ANALYST_FILES = ("propostas.md", "sondas.md", "cycle.json", "meta.json")
++
++
++def project_root() -> Path:
++    return Path(os.environ.get("CLAUDE_PROJECT_DIR") or ".").resolve()
++
++
++def golden_splits(root: Path) -> dict[str, set[str]]:
++    splits: dict[str, set[str]] = {"dev": set(), "holdout": set(), "exame": set()}
++    for path in (root / "evals" / "golden").glob("*.json"):
++        try:
++            data = json.loads(path.read_text(encoding="utf-8"))
++        except (OSError, json.JSONDecodeError):
++            continue
++        for short in data.get("shorts", []):
++            splits.setdefault(short.get("split", "dev"), set()).add(short["video"])
++    return splits
++
++
++def relative(path_str: str, root: Path) -> str:
++    path = Path(path_str)
++    if path.is_absolute():
++        try:
++            return path.resolve().relative_to(root).as_posix()
++        except ValueError:
++            return path.as_posix()
++    return path.as_posix()
++
++
++def analyst_cache_ok(token: str, dev: set[str]) -> bool:
++    parts = [p for p in token.rstrip("/").split("/") if p]
++    if "holdout" in parts or "exame" in parts or "blind" in parts:
++        return False
++    if "sondas" in parts:
++        return True
++    for key in ("labels", "dub", "pending", "escuta"):
++        if key in parts:
++            i = parts.index(key)
++            if i + 1 >= len(parts):
++                return False
++            nxt = parts[i + 1]
++            return nxt == "dev" if key == "labels" else nxt.rsplit(".", 1)[0] in dev
++    return parts[-1] in ANALYST_FILES or parts[-1].startswith("resumo")
++
++
++def analyst_human_ok(token: str, dev: set[str]) -> bool:
++    name = token.rstrip("/").rsplit("/", 1)[-1]
++    return name.endswith(".jsonl") and name.removesuffix(".jsonl") in dev
++
++
++def check(role: str, tool_name: str, tool_input: dict[str, Any], root: Path) -> str | None:
++    """Motivo do bloqueio, ou None se a chamada pode seguir."""
++    blob = json.dumps(tool_input, ensure_ascii=False)
++    if tool_name == "Bash" and FOR_HUMANS.search(str(tool_input.get("command", ""))):
++        return "GPU/Pod, git push e o servidor de escuta ficam com o humano; peça ao orquestrador"
++    if tool_name in WRITE_TOOLS:
++        target = relative(str(tool_input.get("file_path") or tool_input.get("notebook_path")
++                              or ""), root)
++        if role in ("judge", "analyst") and not target.startswith(".cache/"):
++            return f"{role} só escreve em .cache/ (tentou {target})"
++        if role == "implementer" and target.startswith(IMPLEMENTER_PROTECTED):
++            return f"{target} é protegido do ciclo; mudanças nele são do humano"
++        if role == "reviewer" and not target.startswith("tests/"):
++            return f"o revisor só escreve testes em tests/ (tentou {target})"
++    if role == "judge" and "mapping.json" in blob:
++        return "o mapa do A/B cego é escondido do juiz"
++    if role in ("implementer", "reviewer") and (".cache" in blob or "human_labels" in blob):
++        return "implementador e revisor não leem o conjunto de avaliação; trabalhe pelo plano"
++    if role == "analyst":
++        splits = golden_splits(root)
++        dev = splits.get("dev", set())
++        for name in set().union(*(v for k, v in splits.items() if k != "dev")):
++            if re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", blob):
++                return "holdout e exame são só do avaliador; analise apenas o dev"
++        for token in CACHE_TOKEN.findall(blob):
++            if not analyst_cache_ok(token, dev):
++                return f"em .cache/ o analista só lê caminhos de dev (bloqueado: {token})"
++        for token in HUMAN_TOKEN.findall(blob):
++            if not analyst_human_ok(token, dev):
++                return f"dos rótulos humanos o analista só lê arquivos de dev (bloqueado: {token})"
++    return None
++
++
++def main() -> None:
++    role = sys.argv[1] if len(sys.argv) > 1 else ""
++    try:
++        data = json.load(sys.stdin)
++    except json.JSONDecodeError:
++        return
++    reason = check(role, data.get("tool_name", ""), data.get("tool_input") or {}, project_root())
++    if reason:
++        print(f"Bloqueado pelo guarda do ciclo ({role}): {reason}", file=sys.stderr)
++        sys.exit(2)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/.claude/skills/ciclo/SKILL.md b/.claude/skills/ciclo/SKILL.md
+new file mode 100644
+index 0000000..9359f56
+--- /dev/null
++++ b/.claude/skills/ciclo/SKILL.md
+@@ -0,0 +1,74 @@
++---
++name: ciclo
++description: 'Ciclo de qualidade da dublagem, com aprovação humana entre as fases. Uso: /ciclo <fase> [args]. Fases: avaliar [manifesto], calibrar <ciclo>, planejar <ciclo>, implementar <ciclo> <tarefa>, revisar <ciclo> <tarefa>, verificar <ciclo> <tarefa>, marco [manifesto], status.'
++disable-model-invocation: true
++---
++
++Você orquestra o ciclo de qualidade. Argumentos: `$ARGUMENTS` (a primeira palavra é a fase).
++
++## Princípios
++
++- **Produto, não vídeo.** As defesas são estruturais e você não contorna nenhuma: splits dev/holdout/exame, elegibilidade por evidência espalhada, sondas antes de propor, tarefa sem dados do conjunto, revisor adversarial, guarda de diff (`check_generalization`), A/B cego, aceite que exige o holdout, renovação do holdout e o registro do que foi tentado (`evals/ledger.md`).
++- **O juiz é proxy e precisa de calibração.** Seus rótulos (`evals/human_labels/`) valem mais que os do juiz e o substituem onde existem. O portão da Fase 0 é só rótulo humano. Classe em que o juiz não está calibrado só é aceita com seu rótulo nos segmentos que mudaram.
++- **O humano decide em quatro pontos:** aprovar o plano, gastar GPU, aceitar a mudança e usar o exame selado. Use AskUserQuestion; subagentes não conseguem perguntar, por isso essas paradas são suas.
++- **Idioma é dado:** tudo que é específico vem do manifesto (`evals/golden/<par>.json`) e do perfil (`evals/languages/<idioma>.*`). Passe o idioma-alvo do manifesto a cada subagente.
++- **Custo:** cada Short julgado custa tokens; cada Short dublado custa ~6 min de GPU até a T0.32. Diga o custo antes de gastar.
++- **Servidor de escuta:** `python -m scripts.listen ...` roda em primeiro plano. Rode-o em background e passe a URL ao humano; encerre quando ele disser que terminou. Agentes não podem rodá-lo.
++- Se um subagente reportar bloqueio do guarda, não contorne: leia o motivo e ajuste a delegação ou pergunte ao humano.
++
++## `avaliar [manifesto]` (padrão `evals/golden/en-pt-BR.json`)
++
++1. Checagens de conjunto. Avise e pergunte antes de seguir se:
++   - há Shorts sem `categoria`, menos de 3 categorias, ou holdout vazio (a generalização não pode ser verificada);
++   - `python -m scripts.eval_cycle usage --manifest <m>` mostra o holdout acima de `higiene.max_usos_holdout`. Proponha renovar: o humano traz Shorts novos, de preferência amostrados do que clippers realmente sobem, que entram no holdout; os holdout mais usados passam para o dev. Nunca mova um Short de dev para holdout ou exame.
++2. Execuções: confira `.cache/dub/<video>/report.json` de cada Short dev e holdout, mais novo que o último commit em `packages/` ou `scripts/`. Para faltantes ou velhos, mostre o custo e pergunte: você roda `python -m scripts.dub <fonte>` (se o SSH falhar, pare e avise), o humano roda, ou cancela. Lembre de desligar o Pod.
++3. `python -m scripts.eval_cycle new --manifest <m> --slug <tema>` e `python -m scripts.eval_cycle snapshot <ciclo> base`.
++4. Se houver ciclo anterior aceito: `python -m scripts.eval_cycle carry <ciclo> <ciclo-anterior>:candidato base`.
++5. Um `dub-judge` por Short (dev e holdout), modo normal, rótulo `base`, até 5 em paralelo.
++6. Ruído e calibração: se `evals/calibration/<par>.json` não existe, é de outro modelo de juiz, ou não tem `ruido`, julgue de novo os Shorts de dev no rótulo `base-r2` (modo normal; o juiz lê a execução `base`, rotula tudo e não olha a primeira leitura) e proponha `/ciclo calibrar <ciclo>` antes de planejar.
++7. `python -m scripts.eval_cycle summary <ciclo> base` e grave em `.cache/cycles/<ciclo>/base/resumo.md`. Relate: Shorts publicáveis (proxy), classes elegíveis do dev, estado da calibração. Próximo passo: `calibrar` ou `planejar`.
++
++## `calibrar <ciclo>`
++
++1. Suba `python -m scripts.listen <ciclo> base --todos` e peça ao humano para rotular Shorts inteiros (segmentos e veredito do Short). Isso também é a rotulagem da T0.28. Sugira começar pelos Shorts com mais problemas segundo o juiz e cobrir pelo menos 5 casos de cada classe frequente.
++2. Quando ele terminar: `python -m scripts.eval_cycle calibrate <ciclo> base --repeat base-r2` (sem `--repeat` se o ruído já foi medido com este modelo).
++3. Mostre a tabela (concordância, ruído, classes confiáveis). Commite `evals/human_labels/` e `evals/calibration/`: `evals: add human labels and judge calibration (<ciclo>)`.
++
++## `planejar <ciclo>`
++
++1. Delegue o `dub-analyst` (ciclo, idioma-alvo). Se ele terminar "aguardando sonda de GPU", mostre o comando e o critério de corte de cada sonda, peça aprovação do gasto, rode-a, grave a saída em `.cache/cycles/<ciclo>/sondas/` e retome o analista com o resultado.
++2. Mostre as propostas de `.cache/cycles/<ciclo>/propostas.md` (a parte de evidência é para o humano). Pergunte quais aprovar.
++3. Para cada aprovada: pergunte o id e a posição; escreva no `TASKS.md` **só** a parte "Tarefa para o TASKS.md"; rode `python -m scripts.check_generalization`. Se houver bloqueio, a tarefa vazou dado do conjunto: reescreva os exemplos (ou devolva ao analista). Acrescente "planejado" ao `evals/ledger.md` e commite: `docs: add <id> from quality cycle <ciclo>`.
++
++## `implementar <ciclo> <tarefa>`
++
++1. Exija árvore limpa. Base = branch atual. Crie `ciclo/<ciclo>-<tarefa>`.
++2. Delegue o `dub-implementer` com o texto da tarefa do `TASKS.md`, o branch e a base.
++3. Verifique por conta própria: `make lint && make test`, `python -m scripts.check_generalization --base <base>`, `git diff --stat <base>`. Siga para `revisar`.
++
++## `revisar <ciclo> <tarefa>`
++
++1. Delegue o `dub-reviewer` com a tarefa, o branch e a base.
++2. Se **PEDIR MUDANÇAS**: retome o `dub-implementer` uma vez com os achados e os testes adversariais; depois rode o revisor de novo. Se continuar pedindo mudanças, ou se o implementador contestar um teste, pare e mostre os dois lados ao humano.
++3. Com **APROVAR** e lint, testes e guarda verdes: pergunte se pode gastar GPU em `verificar`.
++
++## `verificar <ciclo> <tarefa>`
++
++1. No branch, com o gasto aprovado (N Shorts × ~6 min), rode `python -m scripts.dub <fonte>` para os Shorts de dev e holdout. Se o SSH falhar, pare e avise.
++2. `python -m scripts.eval_cycle snapshot <ciclo> candidato`, depois `carry <ciclo> base candidato`, depois `blind <ciclo> base candidato`.
++3. Um `dub-judge` em **modo cego** por Short listado em `.cache/cycles/<ciclo>/blind/` (ciclo, vídeo, idioma). Não diga ao juiz qual versão é qual.
++4. `python -m scripts.eval_cycle unblind <ciclo> base candidato` e `python -m scripts.eval_cycle compare <ciclo> base candidato --alvo <classes da tarefa>`.
++5. Escuta, sempre: suba `python -m scripts.listen <ciclo> candidato --ab base`. O humano ouve cego, rotula as versões e marca a preferência. Rode o `compare` de novo, porque os rótulos dele substituem os do juiz. Com veredito PRECISA DE RÓTULO HUMANO, a escuta é obrigatória antes de qualquer decisão.
++6. Mostre o veredito final, as regressões e as preferências (juiz e humano) e pergunte: aceitar (merge), rejeitar ou iterar. ACEITAR do script não dispensa a decisão dele.
++7. Escreva a entrada do ciclo no `evals/ledger.md` com os números do `compare` e a decisão. O analista lê o ledger: use só números e classes, nunca nome de Short ou trecho do holdout e do exame. Commite com `evals/human_labels/`: `docs: record quality cycle <ciclo>`. Lembre de desligar o Pod.
++
++## `marco [manifesto]`
++
++Só para decisões de marco (portão de fase, antes de mostrar o produto a alguém). O exame selado perde valor a cada uso.
++1. Pergunte se é mesmo um marco. Mostre quantas vezes o exame já foi usado (`eval_cycle usage`).
++2. Rode o pipeline atual nos Shorts de `exame` (gasto aprovado), crie um ciclo, faça `snapshot <ciclo> marco --marco` e suba `python -m scripts.listen <ciclo> marco --todos`. O humano dá o veredito de cada Short. O juiz não participa: a métrica do portão é só humana.
++3. `python -m scripts.eval_cycle summary <ciclo> marco --marco` registra o uso e dá a taxa de publicação. Registre no ledger.
++
++## `status`
++
++Liste `.cache/cycles/*/` com a fase em que cada ciclo parou e o próximo comando, o estado da calibração (modelo, ruído, classes confiáveis) e o uso do holdout e do exame.
+diff --git a/evals/golden/en-pt-BR.json b/evals/golden/en-pt-BR.json
+new file mode 100644
+index 0000000..39508a5
+--- /dev/null
++++ b/evals/golden/en-pt-BR.json
+@@ -0,0 +1,68 @@
++{
++  "par": "en-pt-BR",
++  "idioma_fonte": "en",
++  "idioma_alvo": "pt-BR",
++  "nota": "Conjunto fixo de avaliação do ciclo de qualidade. 'video' é o nome do diretório em .cache/dub/; 'fonte' é o argumento de scripts/dub.py. Splits: 'dev' (o analista vê), 'holdout' (aceite de cada ciclo; analista e implementador não veem), 'exame' (selado, só em marcos com /ciclo marco). Preencha 'categoria'. Com 20 Shorts: ~12 dev, ~5 holdout, ~3 exame. Shorts novos, de preferência amostrados do que clippers realmente sobem, entram no holdout ou no exame; holdout gasto pode virar dev; nunca o contrário.",
++  "elegibilidade": {
++    "min_shorts": 3,
++    "min_categorias": 2
++  },
++  "calibracao": {
++    "min_n": 5,
++    "min_precisao": 0.7,
++    "min_recall": 0.6,
++    "ruido_padrao": 0.15
++  },
++  "aceite": {
++    "tolerancia_abs": 1,
++    "tolerancia_rel": 0.1,
++    "cer_final_margem": 0.02,
++    "descarte_margem_rel": 0.1,
++    "custo_margem_rel": 0.1,
++    "custo_margem_abs_s": 2.0
++  },
++  "higiene": {
++    "max_usos_holdout": 8
++  },
++  "shorts": [
++    {
++      "video": "streamer-divida",
++      "fonte": "videos/streamer-divida.mp4",
++      "categoria": "streamer",
++      "tags": [
++        "dialogo-rapido",
++        "2-locutores",
++        "palavrao"
++      ],
++      "split": "dev"
++    },
++    {
++      "video": "mcconaughey-ironia",
++      "fonte": null,
++      "categoria": null,
++      "tags": [],
++      "split": "dev"
++    },
++    {
++      "video": "jay-shetty-fortes-fracos",
++      "fonte": null,
++      "categoria": null,
++      "tags": [],
++      "split": "dev"
++    },
++    {
++      "video": "poder-da-calma",
++      "fonte": null,
++      "categoria": null,
++      "tags": [],
++      "split": "dev"
++    },
++    {
++      "video": "christian-bale-citacao",
++      "fonte": null,
++      "categoria": null,
++      "tags": [],
++      "split": "dev"
++    }
++  ]
++}
+diff --git a/evals/languages/pt-BR.json b/evals/languages/pt-BR.json
+new file mode 100644
+index 0000000..4ad701c
+--- /dev/null
++++ b/evals/languages/pt-BR.json
+@@ -0,0 +1,14 @@
++{
++  "codigo": "pt-BR",
++  "nome": "português brasileiro",
++  "perfil_juiz": "evals/languages/pt-BR.md",
++  "perguntas": {
++    "polar_marcada_por_entonacao": true,
++    "inicio_interrogativo": [
++      "o que", "o quê", "por que", "porque", "por quê", "pra que", "para que", "do que",
++      "de que", "em que", "com quem", "pra quem", "para quem", "de quem", "que", "quê",
++      "quem", "quanto", "quanta", "quantos", "quantas", "como", "onde", "aonde", "quando",
++      "qual", "quais", "cadê"
++    ]
++  }
++}
+diff --git a/evals/languages/pt-BR.md b/evals/languages/pt-BR.md
+new file mode 100644
+index 0000000..c7ca8ae
+--- /dev/null
++++ b/evals/languages/pt-BR.md
+@@ -0,0 +1,35 @@
++# Perfil de avaliação: português brasileiro (pt-BR)
++
++Critérios específicos do idioma-alvo para o `dub-judge` e o `dub-analyst`. A lógica dos agentes é a mesma para qualquer idioma; o que muda está aqui e em `pt-BR.json`. Para um idioma novo, copie este arquivo e o JSON e reescreva o conteúdo; não mude os agentes.
++
++## Alvo
++
++Português brasileiro **falado**, como um criador brasileiro falaria no vídeo. Não é legenda, não é texto escrito.
++
++## Exemplos por classe da taxonomia
++
++Todos os exemplos abaixo são inventados. Nunca copie para cá frases do conjunto de avaliação: o perfil é lido por todos os agentes, e exemplo real do conjunto acopla o juiz ao dev e vaza texto para quem implementa.
++
++- `sentido.pessoa_sujeito`: o pt-BR omite sujeito e usa "seu" ambíguo, e a tradução frase a frase não sabe com quem se fala. "Does your mom cook for you?" → "Sua mãe te cozinha?" (inverte o sentido); "She bought it" → "Cê falou que comprou" (vira "você comprou"); "His idea", dito a outra pessoa → "Sua ideia" (vira a ideia de quem ouve).
++- `sentido.literal`: "Give your sister a call" → "Dê uma chamada à sua irmã" (o certo é "Liga pra sua irmã"); "That's the catch" → "Essa é a pegada"; "room" → "quarto" quando é "espaço".
++- `registro.formal_demais`: "lhe", "conosco", ênclise ("dá-me"), "Ouça", imperativo formal ("Telefone") na fala casual. Mistura de registro também é erro: "tô lhe falando".
++- `registro.variante`: formas de pt-PT ("estás", "a fazer", "rapariga", "casa de banho"). No áudio, sotaque lusitano do TTS conta como `pronuncia.termo` ou `registro.variante`, conforme a evidência.
++- `tom.suavizado`: palavrão sai como no original (decisão de 2026-10-10). "This is bullshit" não vira "isso é besteira". Vale também para as suas sugestões.
++- `concordancia.genero`: "Tô cansada" para locutor homem; adjetivo concordando com o gênero errado.
++- `pronuncia.termo`: siglas, marcas, números e valores ("NBA", "iPhone", "R$ 3.500"), nomes em inglês.
++
++## Fala natural (para sugestões)
++
++Use: "cê/você", "tá", "pra", "a gente", "né", próclise ("me dá"), imperativo do dia a dia ("liga", "olha", "fala").
++Evite: "lhe", "conosco", ênclise, "Ouça", "Aproximadamente" onde se diria "quase" ou "mais ou menos".
++Mantenha o número de sílabas parecido com o da tradução atual (o orçamento de duração é por sílaba).
++
++## Entonação
++
++Pergunta sim/não em pt-BR só se distingue da afirmação pela entonação: "Sua irmã vem com a gente?" e "Sua irmã vem com a gente." têm as mesmas palavras. O `judge_audio` checa o pico final de F0 nessas perguntas. Pergunta com palavra interrogativa (lista em `pt-BR.json`) costuma descer no fim e não é checada.
++
++## Particularidades conhecidas do pipeline
++
++- O MOSS-TTS tende ao sotaque de Portugal (CLAUDE.md, `docs/ptbr.md`).
++- A instrução de estilo do MOSS está desligada e a voz de referência puxa a entrega para o neutro: achatamento é esperado. Aponte onde ele estraga a fala, não todo neutro.
++- O banco de vozes atual só tem vozes masculinas.
+diff --git a/evals/ledger.md b/evals/ledger.md
+new file mode 100644
+index 0000000..cac2e86
+--- /dev/null
++++ b/evals/ledger.md
+@@ -0,0 +1,16 @@
++# Registro do ciclo de qualidade
++
++Append-only. Uma entrada por ciclo, escrita pelo orquestrador (`/ciclo`) depois da sua decisão. O `dub-analyst` lê este arquivo antes de propor: abordagem rejeitada não volta sem evidência nova.
++
++Formato:
++
++## <ciclo> — <idioma> — <título>
++- **Classe-alvo:** ...
++- **Hipótese:** ...
++- **Mudança:** branch / commit, tarefa do TASKS.md
++- **Resultado (juiz, proxy):** dev ... → ...; holdout ... → ...; regressões ...
++- **Escuta humana:** ...
++- **Decisão:** aceita / rejeitada / iterar, por quê
++- **Aprendizado:** o que isso diz sobre o pipeline, para os próximos ciclos
++
++---
+diff --git a/evals/taxonomy.json b/evals/taxonomy.json
+new file mode 100644
+index 0000000..875203d
+--- /dev/null
++++ b/evals/taxonomy.json
+@@ -0,0 +1,27 @@
++{
++  "versao": 1,
++  "nota": "Classes de falha independentes de idioma. O perfil do idioma (evals/languages/<codigo>.md) dá exemplos por classe. Classe nova só entra aqui com aprovação humana, quando 'outro' se repetir.",
++  "motivos": ["tradução", "corte", "voz", "emoção", "pronúncia", "timing"],
++  "estagios": ["separação", "ASR", "diarização", "segmentação", "tradução", "texto→TTS", "vozes", "síntese", "montagem"],
++  "classes": {
++    "sentido.pessoa_sujeito": {"motivo": "tradução", "estagio": "tradução", "descricao": "Pessoa, sujeito ou referente trocado: muda quem faz o quê a quem."},
++    "sentido.omissao": {"motivo": "tradução", "estagio": "tradução", "descricao": "Conteúdo do original some na tradução."},
++    "sentido.acrescimo": {"motivo": "tradução", "estagio": "tradução", "descricao": "Tradução acrescenta conteúdo que não está no original."},
++    "sentido.literal": {"motivo": "tradução", "estagio": "tradução", "descricao": "Tradução palavra por palavra que muda ou apaga o sentido (expressão idiomática, verbo com acepção errada)."},
++    "sentido.numero_nome": {"motivo": "tradução", "estagio": "tradução", "descricao": "Número, valor, unidade ou nome próprio errado."},
++    "registro.formal_demais": {"motivo": "tradução", "estagio": "tradução", "descricao": "Soa escrito ou formal, não como fala do idioma-alvo."},
++    "registro.variante": {"motivo": "tradução", "estagio": "tradução", "descricao": "Forma de outra variante do idioma (ex.: europeia num alvo brasileiro)."},
++    "tom.suavizado": {"motivo": "tradução", "estagio": "tradução", "descricao": "Palavrão, gíria ou agressividade suavizados em relação ao original."},
++    "concordancia.genero": {"motivo": "tradução", "estagio": "tradução", "descricao": "Gênero ou concordância errados para quem fala ou de quem se fala."},
++    "borda.frase_partida": {"motivo": "tradução", "estagio": "segmentação", "descricao": "Frase partida entre segmentos que não faz sentido lida junta."},
++    "corte.fala_perdida": {"motivo": "corte", "estagio": "montagem", "descricao": "Palavras da tradução somem no áudio entregue."},
++    "timing.ritmo": {"motivo": "timing", "estagio": "síntese", "descricao": "Fala apressada ou arrastada demais para o trecho."},
++    "voz.genero_idade": {"motivo": "voz", "estagio": "vozes", "descricao": "Voz de gênero ou idade incompatível com o locutor."},
++    "voz.compartilhada": {"motivo": "voz", "estagio": "diarização", "descricao": "Dois locutores com a mesma voz, ou um segmento com falas de dois locutores."},
++    "voz.instavel": {"motivo": "voz", "estagio": "síntese", "descricao": "A voz do mesmo locutor muda entre segmentos."},
++    "entonacao.pergunta": {"motivo": "emoção", "estagio": "síntese", "descricao": "Pergunta que soa como afirmação, ou o contrário."},
++    "emocao.achatada": {"motivo": "emoção", "estagio": "síntese", "descricao": "Entrega plana onde o original tem energia ou emoção."},
++    "pronuncia.termo": {"motivo": "pronúncia", "estagio": "texto→TTS", "descricao": "Nome, sigla, número ou palavra estrangeira mal pronunciados."},
++    "outro": {"motivo": null, "estagio": null, "descricao": "Não cabe em nenhuma classe; descreva na evidência. O analista propõe classe nova se repetir."}
++  }
++}
+diff --git a/scripts/check_generalization.py b/scripts/check_generalization.py
+new file mode 100644
+index 0000000..62f704d
+--- /dev/null
++++ b/scripts/check_generalization.py
+@@ -0,0 +1,209 @@
++"""Guarda contra overfitting no diff de uma mudança (ferramenta de dev).
++
++O produto recebe vídeos arbitrários. Uma correção que só funciona porque
++conhece o conjunto de avaliação é inútil e esconde o problema. Este script
++procura, nas linhas adicionadas desde `--base`:
++
++- bloqueia: trecho do conjunto (n-grama de NGRAM palavras do inglês ou da
++  tradução), nome de vídeo do conjunto, id de segmento (`seg` + 4 dígitos);
++- avisa: constante numérica de módulo alterada em `packages/` (limiar). Não
++  é proibido, mas precisa de justificativa medida no conjunto inteiro.
++
++Os dados de avaliação em si (manifestos, rótulos humanos, calibração e o
++ledger) ficam fora da varredura: são do humano e protegidos pelo guarda.
++
++Em `tests/` os achados viram aviso: o projeto usa dado sintético em teste,
++com exceção documentada de fixture real.
++
++Com `--dados`, checa um dataset de treino (LoRA, fine-tune) em vez do diff:
++treinar com texto do conjunto de avaliação é o overfitting definitivo, porque
++o ciclo diria ACEITAR sem o produto melhorar.
++
++Rode depois de commitar (arquivos novos não rastreados também são lidos):
++    python -m scripts.check_generalization [--base master]
++    python -m scripts.check_generalization --dados dataset/train.jsonl
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import re
++import subprocess
++import sys
++from dataclasses import dataclass
++from pathlib import Path
++
++NGRAM = 5
++DUB_CACHE = Path(".cache/dub")
++DUBLADOS = Path("videos/dublados")
++GOLDEN_DIR = Path("evals/golden")
++SEGMENT_ID = re.compile(r"\bseg\d{4}\b")
++EVAL_DATA = ("evals/golden/", "evals/human_labels/", "evals/calibration/", "evals/ledger.md")
++CONSTANT = re.compile(r"^(_?[A-Z][A-Z0-9_]*)\s*(?::[^=]+)?=\s*([-+]?\d[\d_.eE+-]*)\s*(?:#.*)?$")
++
++
++@dataclass(frozen=True)
++class Finding:
++    severity: str  # "bloqueia" | "aviso"
++    path: str
++    detail: str
++
++
++def words(text: str) -> list[str]:
++    return re.findall(r"[^\W_]+", text.lower())
++
++
++def ngrams(tokens: list[str], n: int = NGRAM) -> set[tuple[str, ...]]:
++    return {tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)}
++
++
++def parse_diff(diff: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
++    """Linhas adicionadas e removidas de um `git diff --unified=0`, com o arquivo."""
++    added, removed, path = [], [], ""
++    for line in diff.splitlines():
++        if line.startswith("+++ "):
++            path = line[6:] if line.startswith("+++ b/") else line[4:]
++        elif line.startswith("--- "):
++            continue
++        elif line.startswith("+"):
++            added.append((path, line[1:]))
++        elif line.startswith("-"):
++            removed.append((path, line[1:]))
++    return added, removed
++
++
++def load_corpus(manifest_paths: list[Path], dub_cache: Path = DUB_CACHE,
++                dublados: Path = DUBLADOS) -> tuple[set[tuple[str, ...]], set[str]]:
++    """N-gramas de todo texto do conjunto (fonte e tradução) e nomes dos vídeos."""
++    grams: set[tuple[str, ...]] = set()
++    names: set[str] = set()
++    for manifest_path in manifest_paths:
++        for short in json.loads(manifest_path.read_text(encoding="utf-8"))["shorts"]:
++            video = short["video"]
++            names.add(video)
++            texts: list[str] = []
++            report = dub_cache / video / "report.json"
++            if report.exists():
++                for seg in json.loads(report.read_text(encoding="utf-8"))["segments"]:
++                    texts += [seg.get("texto_original") or "", seg.get("traducao") or ""]
++            for path in dublados.glob(f"{video}*_traducao.json"):
++                for seg in json.loads(path.read_text(encoding="utf-8")):
++                    texts += [seg.get("texto_original") or "", seg.get("traducao_usada") or ""]
++            for text in texts:
++                grams |= ngrams(words(text))
++    return grams, names
++
++
++def find_leaks(added: list[tuple[str, str]], grams: set[tuple[str, ...]],
++               names: set[str]) -> list[Finding]:
++    findings = []
++    name_patterns = {n: re.compile(rf"(?<![\w-]){re.escape(n)}(?![\w-])") for n in names}
++    for path, line in added:
++        if path.startswith(EVAL_DATA):
++            continue
++        severity = "aviso" if path.startswith("tests/") else "bloqueia"
++        hit = ngrams(words(line)) & grams
++        if hit:
++            phrase = " ".join(sorted(hit)[0])
++            findings.append(Finding(severity, path, f"texto do conjunto de avaliação: '{phrase}…'"))
++        for name, pattern in name_patterns.items():
++            if pattern.search(line):
++                findings.append(Finding(severity, path, f"nome de vídeo do conjunto: {name}"))
++        if SEGMENT_ID.search(line) and not path.startswith("tests/"):
++            findings.append(Finding("bloqueia", path, f"id de segmento no código: {line.strip()}"))
++    return findings
++
++
++def threshold_changes(added: list[tuple[str, str]],
++                      removed: list[tuple[str, str]]) -> list[Finding]:
++    def constants(rows: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
++        found = {}
++        for path, line in rows:
++            match = CONSTANT.match(line.strip())
++            if path.startswith("packages/") and match:
++                found[(path, match.group(1))] = match.group(2)
++        return found
++
++    old, new = constants(removed), constants(added)
++    return [
++        Finding("aviso", path, f"limiar {name}: {old.get((path, name), 'novo')} → {value} "
++                               "(justifique com medida no conjunto inteiro)")
++        for (path, name), value in new.items()
++        if old.get((path, name)) != value
++    ]
++
++
++def scan_dataset(paths: list[Path], grams: set[tuple[str, ...]]) -> list[Finding]:
++    """Linhas de um dataset (jsonl, txt, csv) que contêm texto do conjunto."""
++    findings = []
++    for path in paths:
++        with path.open(encoding="utf-8", errors="replace") as fh:
++            for number, line in enumerate(fh, start=1):
++                hit = ngrams(words(line)) & grams
++                if hit:
++                    phrase = " ".join(sorted(hit)[0])
++                    findings.append(Finding("bloqueia", f"{path}:{number}",
++                                            f"texto do conjunto de avaliação: '{phrase}…'"))
++    return findings
++
++
++def default_base() -> str:
++    """Branch padrão do repositório (origin/HEAD), senão main ou master."""
++    head = subprocess.run(["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
++                          capture_output=True, text=True)
++    if head.returncode == 0 and head.stdout.strip():
++        return head.stdout.strip().removeprefix("origin/")
++    for name in ("main", "master"):
++        if subprocess.run(["git", "rev-parse", "--verify", "--quiet", name],
++                          capture_output=True).returncode == 0:
++            return name
++    return "HEAD"
++
++
++def collect_diff(base: str) -> str:
++    proc = subprocess.run(["git", "diff", "--unified=0", base], capture_output=True, text=True)
++    if proc.returncode != 0:
++        sys.exit(f"git diff contra '{base}' falhou: {proc.stderr.strip()} "
++                 "(passe o branch base certo com --base)")
++    diff = proc.stdout
++    untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"],
++                               capture_output=True, text=True, check=True).stdout.split()
++    for path in untracked:
++        try:
++            body = Path(path).read_text(encoding="utf-8")
++        except (UnicodeDecodeError, OSError):
++            continue
++        diff += f"\n+++ b/{path}\n" + "".join(f"+{line}\n" for line in body.splitlines())
++    return diff
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="Guarda contra overfitting no diff")
++    parser.add_argument("--base", help="branch base (padrão: o branch padrão do repo)")
++    parser.add_argument("--manifest", type=Path, action="append",
++                        help="manifesto do conjunto (padrão: todos em evals/golden/)")
++    parser.add_argument("--dados", type=Path, action="append",
++                        help="dataset de treino a checar em vez do diff")
++    args = parser.parse_args()
++
++    manifests = args.manifest or sorted(p for p in GOLDEN_DIR.glob("*.json")
++                                        if not p.name.endswith(".usage.json"))
++    grams, names = load_corpus(manifests)
++    if args.dados:
++        findings = scan_dataset(args.dados, grams)
++    else:
++        added, removed = parse_diff(collect_diff(args.base or default_base()))
++        findings = find_leaks(added, grams, names) + threshold_changes(added, removed)
++    for f in findings:
++        print(f"[{f.severity}] {f.path}: {f.detail}")
++    if not grams:
++        print("[aviso] nenhum texto do conjunto encontrado em .cache/dub/ ou videos/dublados/: "
++              "a checagem de texto não teve contra o que comparar")
++    blocked = [f for f in findings if f.severity == "bloqueia"]
++    print(f"{len(blocked)} bloqueio(s), {len(findings) - len(blocked)} aviso(s)")
++    sys.exit(1 if blocked else 0)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/dub.py b/scripts/dub.py
+index cb99b0c..9fe31ce 100644
+--- a/scripts/dub.py
++++ b/scripts/dub.py
+@@ -515,15 +515,36 @@ def update_dashboard(
+     return dashboard_path
+ 
+ 
++STAGE_TIMINGS_FILE = "stage_timings.json"
++
++
+ @contextmanager
+-def _timed_stage(name: str):
++def _timed_stage(name: str, cache_dir: Path | None = None):
+     """Mede e imprime o tempo de cada etapa remota — pedido explícito do
+     usuário (2026-09-18) pra ter dado real de onde o tempo vai, em vez de
+-    suposição, antes de otimizar velocidade."""
++    suposição, antes de otimizar velocidade.
++
++    Com `cache_dir`, grava o tempo em `stage_timings.json`. Só etapa que
++    rodou de verdade passa por aqui; etapa reaproveitada do cache mantém o
++    tempo da última execução real, então a soma estima o custo de uma
++    execução fria do código atual (portão de custo do ciclo de qualidade).
++    """
+     start = time.monotonic()
+     yield
+     elapsed = time.monotonic() - start
+     print(f"[timing] {name}: {elapsed:.1f}s", flush=True)
++    if cache_dir is not None:
++        _record_stage_timing(cache_dir, name, elapsed)
++
++
++def _record_stage_timing(cache_dir: Path, name: str, elapsed: float) -> None:
++    path = cache_dir / STAGE_TIMINGS_FILE
++    try:
++        timings = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
++    except json.JSONDecodeError:
++        timings = {}
++    timings[name] = round(elapsed, 2)
++    path.write_text(json.dumps(timings, indent=2), encoding="utf-8")
+ 
+ 
+ VOICE_BANK_MANIFEST = Path("assets/voices/bank/voices.json")
+@@ -608,7 +629,7 @@ def run_pipeline(
+     vocals_path = cached("vocals.wav")
+     separate_stems_hash = _hash_file(audio_path)
+     if needs_stage(background_path, "separate_stems", separate_stems_hash):
+-        with _timed_stage("separate_stems"):
++        with _timed_stage("separate_stems", cache_dir):
+             upload_to_pod(pod, str(audio_path), f"{remote_job_dir}/audio.wav")
+             run_on_pod(
+                 pod,
+@@ -629,7 +650,7 @@ def run_pipeline(
+     transcript_path = cached("transcript.json")
+     transcribe_hash = _hash_file(vocals_path)
+     if needs_stage(transcript_path, "transcribe", transcribe_hash):
+-        with _timed_stage("transcribe"):
++        with _timed_stage("transcribe", cache_dir):
+             run_on_pod(
+                 pod,
+                 f"{pod.python_asr} -m scripts.pod_worker transcribe "
+@@ -702,7 +723,7 @@ def run_pipeline(
+         (cache_dir / "translate_jobs.json").write_text(
+             json.dumps(translate_jobs, ensure_ascii=False), encoding="utf-8"
+         )
+-        with _timed_stage("translate"):
++        with _timed_stage("translate", cache_dir):
+             upload_to_pod(
+                 pod,
+                 str(cache_dir / "translate_jobs.json"),
+@@ -774,7 +795,7 @@ def run_pipeline(
+         (cache_dir / "synth_jobs.json").write_text(
+             json.dumps(synth_jobs, ensure_ascii=False), encoding="utf-8"
+         )
+-        with _timed_stage("synthesize"):
++        with _timed_stage("synthesize", cache_dir):
+             upload_to_pod(
+                 pod, str(cache_dir / "synth_jobs.json"), f"{remote_job_dir}/synth_jobs.json"
+             )
+@@ -808,7 +829,7 @@ def run_pipeline(
+         (cache_dir / "eval_jobs.json").write_text(
+             json.dumps(eval_jobs, ensure_ascii=False), encoding="utf-8"
+         )
+-        with _timed_stage("evaluate"):
++        with _timed_stage("evaluate", cache_dir):
+             upload_to_pod(
+                 pod, str(cache_dir / "eval_jobs.json"), f"{remote_job_dir}/eval_jobs.json"
+             )
+@@ -1101,7 +1122,7 @@ def run_pipeline(
+         final_segments_dir.mkdir(parents=True, exist_ok=True)
+         for seg_id, seg_audio, seg_sr in final_audio_by_seg:
+             sf.write(final_segments_dir / f"{seg_id}.wav", seg_audio, seg_sr)
+-        with _timed_stage("upload_final_segments"):
++        with _timed_stage("upload_final_segments", cache_dir):
+             upload_to_pod(pod, str(final_segments_dir), f"{remote_job_dir}/final_segments")
+ 
+         # --- auditoria final (remoto, Whisper large-v3 via cmd_evaluate) —
+@@ -1127,7 +1148,7 @@ def run_pipeline(
+             sf.write(
+                 final_mixed_segments_dir / f"{seg_id}.wav", mixed_segment_audio, SYNTH_SAMPLE_RATE
+             )
+-        with _timed_stage("upload_final_mixed_segments"):
++        with _timed_stage("upload_final_mixed_segments", cache_dir):
+             upload_to_pod(
+                 pod, str(final_mixed_segments_dir), f"{remote_job_dir}/final_mixed_segments"
+             )
+@@ -1140,7 +1161,7 @@ def run_pipeline(
+             json.dumps(final_cer_jobs, ensure_ascii=False), encoding="utf-8"
+         )
+         final_cer_path = cached("final_cer.json")
+-        with _timed_stage("evaluate_final"):
++        with _timed_stage("evaluate_final", cache_dir):
+             upload_to_pod(
+                 pod,
+                 str(cache_dir / "final_cer_jobs.json"),
+@@ -1211,7 +1232,7 @@ def run_pipeline(
+                 json.dumps(emotion_jobs, ensure_ascii=False), encoding="utf-8"
+             )
+             emotion_path = cached("emotion.json")
+-            with _timed_stage("match_emotion"):
++            with _timed_stage("match_emotion", cache_dir):
+                 upload_to_pod(
+                     pod,
+                     str(cache_dir / "emotion_jobs.json"),
+diff --git a/scripts/eval_blind.py b/scripts/eval_blind.py
+new file mode 100644
+index 0000000..fc6a1f2
+--- /dev/null
++++ b/scripts/eval_blind.py
+@@ -0,0 +1,148 @@
++"""A/B cego para o juiz na fase verificar (ferramenta de dev).
++
++O juiz não sabe qual versão é a nova. Para cada Short com segmentos que
++mudaram, `prepare` cria `blind/<video>/A` e `B`, sorteados entre base e
++candidato, com os segmentos que mudaram no candidato e os da base que se
++sobrepõem a eles no tempo. O mapa fica em `blind/mapping.json`, que o guarda
++do ciclo esconde do juiz. As duas versões são julgadas na mesma sessão, lado
++a lado, o que tira o ruído de sessões diferentes da comparação.
++
++`unblind` devolve os rótulos para `<candidato>`, cria `<base>-par` (a base
++com os mesmos trechos rejulgados) e grava as preferências do juiz já
++desembaralhadas em `preferencias_juiz.json`.
++"""
++
++from __future__ import annotations
++
++import os
++import random
++import shutil
++from pathlib import Path
++from typing import Any
++
++from scripts.eval_common import (
++    CYCLES,
++    SPLITS,
++    cycle_dir,
++    labels_path,
++    load_cycle,
++    read_json,
++    read_jsonl,
++    read_labels,
++    read_pending,
++    run_dir,
++    shorts,
++    write_json,
++    write_labels,
++)
++from scripts.judge_packet import ReviewSegment, load_run
++
++SMALL_FILES = ("report.json", "segments.json", "synth_jobs.json")
++LARGE_FILES = ("vocals.wav", "audio.wav")
++
++
++def _overlaps(a: ReviewSegment, b: ReviewSegment) -> bool:
++    return min(a.end, b.end) - max(a.start, b.start) > 0
++
++
++def _link_or_copy(src: Path, dst: Path) -> None:
++    try:
++        os.link(src, dst)
++    except OSError:
++        shutil.copy2(src, dst)
++
++
++def _materialize(src: Path, dst: Path, ids: list[str]) -> None:
++    """Cópia mínima de uma execução: metadados, fonte e só os segmentos em julgamento."""
++    (dst / "final_segments").mkdir(parents=True, exist_ok=True)
++    for name in SMALL_FILES:
++        if (src / name).exists():
++            shutil.copy2(src / name, dst / name)
++    for name in LARGE_FILES:
++        if (src / name).exists():
++            _link_or_copy(src / name, dst / name)
++    for seg_id in ids:
++        wav = src / "final_segments" / f"{seg_id}.wav"
++        if wav.exists():
++            shutil.copy2(wav, dst / "final_segments" / wav.name)
++
++
++def prepare(cycle_id: str, base: str, cand: str, root: Path = CYCLES,
++            seed: int | None = None) -> dict[str, int]:
++    _, manifest = load_cycle(cycle_id, root)
++    cdir = cycle_dir(cycle_id, root)
++    blind = cdir / "blind"
++    if blind.exists():
++        shutil.rmtree(blind)
++    rng = random.Random(seed)
++    mapping: dict[str, dict[str, str]] = {}
++    counts = {"shorts": 0, "segmentos": 0}
++    for short in shorts(manifest):
++        video, split = short["video"], short.get("split")
++        if split not in SPLITS:
++            continue
++        pending = read_pending(cdir, cand, video)
++        if not pending:
++            continue
++        cand_segs = {s.id: s for s in load_run(run_dir(cdir, cand, video))[1]}
++        changed = [cand_segs[i] for i in pending if i in cand_segs]
++        base_ids = [s.id for s in load_run(run_dir(cdir, base, video))[1]
++                    if any(_overlaps(s, c) for c in changed)]
++        sides = [(base, base_ids), (cand, [c.id for c in changed])]
++        rng.shuffle(sides)
++        mapping[video] = {"A": sides[0][0], "B": sides[1][0], "split": split}
++        for letter, (label, ids) in zip("AB", sides, strict=True):
++            _materialize(run_dir(cdir, label, video), blind / video / letter, ids)
++            (blind / video / f"pending_{letter}.txt").write_text(
++                "".join(f"{i}\n" for i in ids), encoding="utf-8")
++        counts["shorts"] += 1
++        counts["segmentos"] += len(changed)
++    write_json(blind / "mapping.json", mapping)
++    return counts
++
++
++def _merge(existing: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
++    by_id = {r["segment_id"]: r for r in existing}
++    by_id.update({r["segment_id"]: r for r in new})
++    return list(by_id.values())
++
++
++def unblind(cycle_id: str, base: str, cand: str, root: Path = CYCLES) -> dict[str, Any]:
++    _, manifest = load_cycle(cycle_id, root)
++    cdir = cycle_dir(cycle_id, root)
++    blind = cdir / "blind"
++    mapping = read_json(blind / "mapping.json")
++    paired = f"{base}-par"
++    prefs = {"base": 0, "candidato": 0, "igual": 0}
++    for short in shorts(manifest):
++        video, split = short["video"], short.get("split")
++        if split not in SPLITS:
++            continue
++        base_rows, base_short = read_labels(labels_path(cdir, base, split, video))
++        if video not in mapping:
++            write_labels(labels_path(cdir, paired, split, video),
++                         base_rows + ([base_short] if base_short else []))
++            continue
++        letter_of = {mapping[video]["A"]: "A", mapping[video]["B"]: "B"}
++        for label, target, existing, existing_short in (
++            (base, paired, base_rows, base_short),
++            (cand, cand, *read_labels(labels_path(cdir, cand, split, video))),
++        ):
++            rows, short_row = read_labels(blind / video / f"labels_{letter_of[label]}.jsonl")
++            revs = {s.id: s.rev for s in load_run(run_dir(cdir, label, video))[1]}
++            fixed = [{**r, "video": video, "rev": revs[r["segment_id"]], "cego": True}
++                     for r in rows if r.get("segment_id") in revs]
++            merged = _merge(existing, fixed)
++            final_short = short_row or existing_short
++            if final_short:
++                final_short = {**final_short, "video": video}
++            write_labels(labels_path(cdir, target, split, video),
++                         merged + ([final_short] if final_short else []))
++        for pref in read_jsonl(blind / video / "preferencias.jsonl"):
++            winner = pref.get("melhor")
++            if winner in ("A", "B"):
++                prefs["candidato" if mapping[video][winner] == cand else "base"] += 1
++            elif winner == "igual":
++                prefs["igual"] += 1
++    write_json(cdir / "preferencias_juiz.json", prefs)
++    return {"rotulo_pareado": paired, "preferencias": prefs}
+diff --git a/scripts/eval_calibration.py b/scripts/eval_calibration.py
+new file mode 100644
+index 0000000..cdfe6c3
+--- /dev/null
++++ b/scripts/eval_calibration.py
+@@ -0,0 +1,204 @@
++"""Calibração do juiz contra rótulos humanos e medida do ruído do juiz.
++
++O ciclo otimiza o que o juiz diz. Este módulo responde se dá para confiar
++nele, classe a classe, em vez de supor:
++
++- concordância juiz × humano por classe, em segmentos com o mesmo `rev`:
++  precisão (quando o juiz aponta, você concorda que há problema?) e recall
++  (quando você aponta, o juiz tinha apontado?);
++- ruído do juiz: o mesmo Short julgado duas vezes. A taxa de discordância
++  vira a tolerância do `compare` para os segmentos que foram reavaliados.
++
++Classe com amostra pequena ou concordância baixa é "não confiável": o
++`compare` não aceita mudança nela sem rótulo humano nos segmentos que mudaram.
++O resultado fica em `evals/calibration/<par>.json` (versionado) e vale só
++para o modelo de juiz com que foi medido.
++"""
++
++from __future__ import annotations
++
++from collections import defaultdict
++from pathlib import Path
++from typing import Any
++
++from scripts.eval_common import (
++    CALIBRATION,
++    CYCLES,
++    HUMAN_LABELS,
++    PROBLEM_LABELS,
++    cycle_dir,
++    labels_path,
++    load_cycle,
++    load_human,
++    now,
++    pair_name,
++    read_json,
++    read_labels,
++    shorts,
++    write_json,
++)
++
++DEFAULTS = {"min_n": 5, "min_precisao": 0.7, "min_recall": 0.6, "ruido_padrao": 0.15}
++
++
++def flagged(row: dict[str, Any]) -> bool:
++    return row.get("rotulo") in PROBLEM_LABELS
++
++
++def merge_human(rows: list[dict[str, Any]],
++                human: dict[tuple[str, str], dict[str, Any]]) -> list[dict[str, Any]]:
++    """Troca o rótulo do juiz pelo humano onde houver (mesmo segmento e rev)."""
++    merged = []
++    for row in rows:
++        h = human.get((row.get("segment_id", ""), row.get("rev", "")))
++        if h is None:
++            merged.append({**row, "fonte": row.get("fonte", "juiz")})
++        else:
++            merged.append({**row, "rotulo": h["rotulo"], "classe": h.get("classe"),
++                           "fonte": "humano"})
++    return merged
++
++
++def agreement(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
++    """Concordância entre dois rotuladores. `pairs` = (avaliado, referência)."""
++    tp = fp = fn = tn = class_flips = 0
++    per: dict[str, dict[str, int]] = defaultdict(
++        lambda: {"juiz": 0, "confirmado": 0, "mesma_classe": 0, "ref": 0, "detectado": 0})
++    for judged, ref in pairs:
++        j, r = flagged(judged), flagged(ref)
++        tp, fp, fn, tn = tp + (j and r), fp + (j and not r), fn + (r and not j), tn + (not (j or r))
++        if j and r and judged.get("classe") != ref.get("classe"):
++            class_flips += 1
++        if j:
++            c = per[judged.get("classe") or "outro"]
++            c["juiz"] += 1
++            c["confirmado"] += r
++            c["mesma_classe"] += r and judged.get("classe") == ref.get("classe")
++        if r:
++            c = per[ref.get("classe") or "outro"]
++            c["ref"] += 1
++            c["detectado"] += j
++    n = tp + fp + fn + tn
++    if n == 0:
++        return {"n": 0, "classes": {}}
++    po = (tp + tn) / n
++    pe = ((tp + fp) * (tp + fn) + (fn + tn) * (fp + tn)) / n**2
++    return {
++        "n": n, "vp": tp, "fp": fp, "fn": fn, "vn": tn,
++        "concordancia": round(po, 3),
++        "kappa": round((po - pe) / (1 - pe), 3) if pe < 1 else 1.0,
++        "discordancia": round((fp + fn + class_flips) / n, 3),
++        "classes": {k: dict(v) for k, v in per.items()},
++    }
++
++
++def judge_human_pairs(cycle_id: str, label: str, root: Path = CYCLES,
++                      human_root: Path = HUMAN_LABELS) -> list[tuple[dict, dict]]:
++    _, manifest = load_cycle(cycle_id, root)
++    cdir, par = cycle_dir(cycle_id, root), pair_name(manifest)
++    pairs = []
++    for short in shorts(manifest):
++        rows, _ = read_labels(labels_path(cdir, label, short["split"], short["video"]))
++        human, _ = load_human(par, short["video"], human_root)
++        pairs += [(r, human[(r["segment_id"], r.get("rev", ""))]) for r in rows
++                  if (r["segment_id"], r.get("rev", "")) in human]
++    return pairs
++
++
++def judge_judge_pairs(cycle_id: str, label_a: str, label_b: str,
++                      root: Path = CYCLES) -> list[tuple[dict, dict]]:
++    _, manifest = load_cycle(cycle_id, root)
++    cdir = cycle_dir(cycle_id, root)
++    pairs = []
++    for short in shorts(manifest):
++        a, _ = read_labels(labels_path(cdir, label_a, short["split"], short["video"]))
++        b, _ = read_labels(labels_path(cdir, label_b, short["split"], short["video"]))
++        b_by_key = {(r["segment_id"], r.get("rev", "")): r for r in b}
++        pairs += [(r, b_by_key[(r["segment_id"], r.get("rev", ""))]) for r in a
++                  if (r["segment_id"], r.get("rev", "")) in b_by_key]
++    return pairs
++
++
++def class_table(agr: dict[str, Any], rule: dict[str, Any]) -> dict[str, dict[str, Any]]:
++    table = {}
++    for name, c in agr.get("classes", {}).items():
++        precision = c["confirmado"] / c["juiz"] if c["juiz"] else None
++        recall = c["detectado"] / c["ref"] if c["ref"] else None
++        table[name] = {
++            "juiz": c["juiz"], "humano": c["ref"],
++            "precisao": round(precision, 2) if precision is not None else None,
++            "recall": round(recall, 2) if recall is not None else None,
++            "mesma_classe": round(c["mesma_classe"] / c["confirmado"], 2)
++            if c["confirmado"] else None,
++            "confiavel": bool(c["juiz"] >= rule["min_n"] and c["ref"] >= rule["min_n"]
++                              and precision is not None and precision >= rule["min_precisao"]
++                              and recall is not None and recall >= rule["min_recall"]),
++        }
++    return table
++
++
++def calibrate(cycle_id: str, label: str, repeat: str | None = None, root: Path = CYCLES,
++              human_root: Path = HUMAN_LABELS, calib_root: Path = CALIBRATION) -> dict[str, Any]:
++    meta, manifest = load_cycle(cycle_id, root)
++    par = pair_name(manifest)
++    rule = {**DEFAULTS, **manifest.get("calibracao", {})}
++    agr = agreement(judge_human_pairs(cycle_id, label, root, human_root))
++    path = calib_root / f"{par}.json"
++    previous = read_json(path) if path.exists() else {}
++    same_model = previous.get("juiz_modelo") == meta.get("juiz_modelo")
++    noise = previous.get("ruido") if same_model else None
++    if repeat:
++        rep = agreement(judge_judge_pairs(cycle_id, label, repeat, root))
++        noise = {"discordancia": rep.get("discordancia"), "n": rep["n"], "ciclo": cycle_id,
++                 "rotulos": [label, repeat]}
++    result = {
++        "par": par, "juiz_modelo": meta.get("juiz_modelo"), "atualizado_em": now(),
++        "ciclo": cycle_id, "regra": rule,
++        "concordancia": {k: v for k, v in agr.items() if k != "classes"},
++        "classes": class_table(agr, rule), "ruido": noise,
++    }
++    write_json(path, result)
++    return result
++
++
++def load_calibration(par: str, model: str | None,
++                     calib_root: Path = CALIBRATION) -> dict[str, Any] | None:
++    """Calibração do par, marcada `valida` só se foi medida com o mesmo modelo de juiz."""
++    path = calib_root / f"{par}.json"
++    if not path.exists():
++        return None
++    data = read_json(path)
++    data["valida"] = data.get("juiz_modelo") == model and model is not None
++    return data
++
++
++def trusted_classes(calib: dict[str, Any] | None) -> set[str]:
++    if not calib or not calib.get("valida"):
++        return set()
++    return {k for k, v in calib.get("classes", {}).items() if v.get("confiavel")}
++
++
++def noise_rate(calib: dict[str, Any] | None) -> tuple[float, bool]:
++    """(taxa de discordância do juiz, se foi medida)."""
++    if calib and calib.get("valida") and calib.get("ruido") and \
++            calib["ruido"].get("discordancia") is not None:
++        return float(calib["ruido"]["discordancia"]), True
++    return DEFAULTS["ruido_padrao"], False
++
++
++def render_calibration(c: dict[str, Any]) -> str:
++    agr = c["concordancia"]
++    lines = [f"# Calibração do juiz — {c['par']} — modelo {c['juiz_modelo']}"]
++    if agr.get("n"):
++        lines.append(f"segmentos com rótulo humano: {agr['n']} · concordância "
++                     f"{agr['concordancia']} · kappa {agr['kappa']}")
++    else:
++        lines.append("nenhum segmento com rótulo humano e rev igual: rotule com scripts.listen")
++    noise = c.get("ruido")
++    lines.append(f"ruído do juiz: {noise['discordancia']} ({noise['n']} segmentos)" if noise
++                 else "ruído do juiz: não medido (julgue o mesmo Short duas vezes)")
++    lines.append("classe | juiz | humano | precisão | recall | confiável")
++    for name, v in sorted(c["classes"].items(), key=lambda kv: -kv[1]["humano"]):
++        lines.append(f"{name} | {v['juiz']} | {v['humano']} | {v['precisao']} | {v['recall']} | "
++                     f"{'sim' if v['confiavel'] else 'não'}")
++    return "\n".join(lines)
+diff --git a/scripts/eval_common.py b/scripts/eval_common.py
+new file mode 100644
+index 0000000..9548b72
+--- /dev/null
++++ b/scripts/eval_common.py
+@@ -0,0 +1,161 @@
++"""Núcleo compartilhado das ferramentas do ciclo de qualidade (ferramenta de dev).
++
++Caminhos, manifesto, splits, leitura e escrita de rótulos e o repositório de
++rótulos humanos. Os módulos `eval_cycle`, `eval_calibration`, `eval_blind` e
++`listen` usam só isto, para não depender uns dos outros.
++
++Splits do manifesto:
++- `dev`: o que o analista vê e usa para planejar;
++- `holdout`: aceite de cada ciclo; o analista e o implementador não veem;
++- `exame`: selado, só nos marcos (portão de fase). Ninguém itera em cima dele.
++
++Rótulos humanos ficam em `evals/human_labels/<par>/<video>.jsonl`,
++versionados, com chave (segmento, rev). Continuam válidos em qualquer ciclo
++enquanto o segmento não mudar, e substituem o rótulo do juiz onde existirem.
++"""
++
++from __future__ import annotations
++
++import json
++import subprocess
++from datetime import datetime
++from pathlib import Path
++from typing import Any
++
++CYCLES = Path(".cache/cycles")
++DUB_CACHE = Path(".cache/dub")
++TAXONOMY = Path("evals/taxonomy.json")
++HUMAN_LABELS = Path("evals/human_labels")
++CALIBRATION = Path("evals/calibration")
++JUDGE_AGENT = Path(".claude/agents/dub-judge.md")
++SPLITS = ("dev", "holdout")
++ALL_SPLITS = ("dev", "holdout", "exame")
++PROBLEM_LABELS = ("corrigiria", "escutar")
++
++
++def now() -> str:
++    return datetime.now().isoformat(timespec="seconds")
++
++
++def read_json(path: Path) -> Any:
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def write_json(path: Path, data: Any) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
++
++
++def read_jsonl(path: Path) -> list[dict[str, Any]]:
++    if not path.exists():
++        return []
++    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
++            if line.strip()]
++
++
++def append_jsonl(path: Path, row: dict[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("a", encoding="utf-8") as fh:
++        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
++
++
++def git_state() -> dict[str, Any]:
++    try:
++        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True,
++                             text=True, check=True).stdout.strip()
++        dirty = bool(subprocess.run(["git", "status", "--porcelain"], capture_output=True,
++                                    text=True, check=True).stdout.strip())
++    except (OSError, subprocess.CalledProcessError):
++        return {"git_sha": None, "git_dirty": None}
++    return {"git_sha": sha, "git_dirty": dirty}
++
++
++def judge_model(agent_path: Path = JUDGE_AGENT) -> str | None:
++    """Modelo fixado no frontmatter do dub-judge (rótulos de modelos diferentes
++    não são comparáveis)."""
++    if not agent_path.exists():
++        return None
++    for line in agent_path.read_text(encoding="utf-8").splitlines()[1:]:
++        if line.strip() == "---":
++            break
++        if line.startswith("model:"):
++            return line.split(":", 1)[1].strip()
++    return None
++
++
++# ---------------------------------------------------------------- ciclo
++
++
++def cycle_dir(cycle_id: str, root: Path = CYCLES) -> Path:
++    return root / cycle_id
++
++
++def load_cycle(cycle_id: str, root: Path = CYCLES) -> tuple[dict[str, Any], dict[str, Any]]:
++    """Devolve (cycle.json, manifesto)."""
++    meta = read_json(cycle_dir(cycle_id, root) / "cycle.json")
++    return meta, read_json(Path(meta["manifest"]))
++
++
++def pair_name(manifest: dict[str, Any]) -> str:
++    return manifest.get("par") or "sem-par"
++
++
++def shorts(manifest: dict[str, Any], split: str | None = None) -> list[dict[str, Any]]:
++    return [s for s in manifest["shorts"] if split is None or s.get("split") == split]
++
++
++def labels_path(cdir: Path, label: str, split: str, video: str) -> Path:
++    return cdir / label / "labels" / split / f"{video}.jsonl"
++
++
++def run_dir(cdir: Path, label: str, video: str) -> Path:
++    return cdir / label / "dub" / video
++
++
++def read_labels(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
++    """Devolve (rótulos de segmento, rótulo do Short ou None)."""
++    segments, short = [], None
++    for row in read_jsonl(path):
++        if "short" in row:
++            short = row
++        else:
++            segments.append(row)
++    return segments, short
++
++
++def write_labels(path: Path, rows: list[dict[str, Any]]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
++                    encoding="utf-8")
++
++
++def read_pending(cdir: Path, label: str, video: str) -> list[str]:
++    path = cdir / label / "pending" / f"{video}.txt"
++    return path.read_text(encoding="utf-8").split() if path.exists() else []
++
++
++# ---------------------------------------------------------------- rótulos humanos
++
++
++def human_path(par: str, video: str, root: Path = HUMAN_LABELS) -> Path:
++    return root / par / f"{video}.jsonl"
++
++
++def load_human(par: str, video: str, root: Path = HUMAN_LABELS
++               ) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, dict[str, Any]]]:
++    """Rótulos humanos de um vídeo: {(segmento, rev): rótulo}, {run_rev: veredito}.
++    A entrada mais recente vence."""
++    segments: dict[tuple[str, str], dict[str, Any]] = {}
++    verdicts: dict[str, dict[str, Any]] = {}
++    for row in read_jsonl(human_path(par, video, root)):
++        if "short" in row:
++            verdicts[row.get("run_rev", "")] = row
++        else:
++            segments[(row["segment_id"], row["rev"])] = row
++    return segments, verdicts
++
++
++def add_human(par: str, row: dict[str, Any], root: Path = HUMAN_LABELS) -> dict[str, Any]:
++    row = {**row, "rotulador": "humano", "em": now()}
++    append_jsonl(human_path(par, row["video"], root), row)
++    return row
+diff --git a/scripts/eval_cycle.py b/scripts/eval_cycle.py
+new file mode 100644
+index 0000000..d0ea2bf
+--- /dev/null
++++ b/scripts/eval_cycle.py
+@@ -0,0 +1,580 @@
++"""Mecânica determinística do ciclo de qualidade (ferramenta de dev).
++
++Os agentes julgam e propõem; este script copia, conta e compara, para que
++nenhum número do ciclo dependa de um LLM somar direito.
++
++    new        --manifest evals/golden/en-pt-BR.json [--slug nome]
++    snapshot   <ciclo> <rotulo> [--marco]       copia de .cache/dub/ o que o juiz lê
++                                                (dev e holdout; com --marco, só o exame)
++    carry      <ciclo> <de> <para>              herda rótulos de segmentos idênticos
++                                                (<de> pode ser <outro-ciclo>:<rotulo>)
++    summary    <ciclo> <rotulo> [--split dev|holdout] [--marco]
++    calibrate  <ciclo> <rotulo> [--repeat <rotulo2>]
++    blind      <ciclo> <base> <candidato>       prepara o A/B cego do juiz
++    unblind    <ciclo> <base> <candidato>       devolve rótulos e preferências
++    compare    <ciclo> <base> <candidato> --alvo classe[,classe]
++    usage      --manifest evals/golden/en-pt-BR.json
++
++Layout em .cache/cycles/<ciclo>/:
++    cycle.json, compare.json, preferencias_juiz.json
++    <rotulo>/dub/<video>/                      snapshot de uma execução
++    <rotulo>/labels/<split>/<video>.jsonl      rótulos do dub-judge
++    <rotulo>/pending/<video>.txt               segmentos que mudaram e precisam de juiz
++    <rotulo>/escuta/<video>.json               fila de escuta sugerida pelo juiz
++    blind/                                     A/B cego (mapa escondido do juiz)
++
++Rótulos humanos (`evals/human_labels/`) substituem os do juiz onde existem.
++Aceite só sai se: a classe-alvo melhora no dev além do ruído medido do juiz
++e em mais Shorts do que piora; não piora no holdout; nada regride (outras
++classes, Shorts publicáveis, CER final, fala descartada, custo por Short,
++preferência do juiz ou sua); e a classe-alvo está calibrada ou os segmentos
++que mudaram têm rótulo humano.
++
++O ruído do juiz é assimétrico de propósito: ele nunca cria um aceite (a
++melhora tem que passar dele), mas pode causar rejeição (regressões são
++estritas). Rejeição por ruído se resolve rotulando os segmentos com
++`scripts.listen`: o rótulo humano substitui o do juiz e tira o ruído.
++"""
++
++from __future__ import annotations
++
++import argparse
++import math
++import shutil
++import sys
++from collections import defaultdict
++from datetime import datetime
++from pathlib import Path
++from typing import Any
++
++from scripts.eval_blind import prepare as blind_prepare
++from scripts.eval_blind import unblind as blind_unblind
++from scripts.eval_calibration import (
++    calibrate,
++    load_calibration,
++    merge_human,
++    noise_rate,
++    render_calibration,
++    trusted_classes,
++)
++from scripts.eval_common import (
++    CALIBRATION,
++    CYCLES,
++    DUB_CACHE,
++    HUMAN_LABELS,
++    PROBLEM_LABELS,
++    SPLITS,
++    TAXONOMY,
++    append_jsonl,
++    cycle_dir,
++    git_state,
++    judge_model,
++    labels_path,
++    load_cycle,
++    load_human,
++    now,
++    pair_name,
++    read_json,
++    read_jsonl,
++    read_labels,
++    read_pending,
++    run_dir,
++    shorts,
++    write_json,
++    write_labels,
++)
++from scripts.judge_packet import load_run, run_revision
++
++SNAPSHOT_FILES = ("report.json", "segments.json", "synth_jobs.json", "translations.json",
++                  "stage_timings.json", "audio.wav", "vocals.wav", "final_audio.wav")
++SNAPSHOT_DIRS = ("final_segments",)
++ACCEPT_DEFAULTS = {"tolerancia_abs": 1, "tolerancia_rel": 0.1, "cer_final_margem": 0.02,
++                   "descarte_margem_rel": 0.1, "custo_margem_rel": 0.1, "custo_margem_abs_s": 2.0}
++MAX_HOLDOUT_USES = 8
++
++__all__ = ["carry", "compare", "labels_path", "new_cycle", "read_labels", "snapshot",
++           "summarize", "write_labels"]
++
++
++# ---------------------------------------------------------------- preparação
++
++
++def new_cycle(manifest_path: Path, slug: str | None, root: Path = CYCLES) -> str:
++    cycle_id = f"{datetime.now():%Y%m%d-%H%M}" + (f"-{slug}" if slug else "")
++    write_json(cycle_dir(cycle_id, root) / "cycle.json", {
++        "id": cycle_id, "manifest": str(manifest_path), "criado_em": now(),
++        "juiz_modelo": judge_model(), **git_state(),
++    })
++    return cycle_id
++
++
++def snapshot(cycle_id: str, label: str, root: Path = CYCLES, dub_cache: Path = DUB_CACHE,
++             splits: tuple[str, ...] = SPLITS) -> list[str]:
++    """Copia a execução atual de cada Short dos `splits`; devolve os vídeos sem execução.
++    O exame selado fica fora dos ciclos normais: só entra com splits=("exame",), no marco."""
++    _, manifest = load_cycle(cycle_id, root)
++    base = cycle_dir(cycle_id, root) / label
++    missing = []
++    for short in [s for s in shorts(manifest) if s.get("split") in splits]:
++        src = dub_cache / short["video"]
++        if not (src / "report.json").exists():
++            missing.append(short["video"])
++            continue
++        dst = base / "dub" / short["video"]
++        dst.mkdir(parents=True, exist_ok=True)
++        for name in SNAPSHOT_FILES:
++            if (src / name).exists():
++                shutil.copy2(src / name, dst / name)
++        for name in SNAPSHOT_DIRS:
++            if (src / name).is_dir():
++                shutil.copytree(src / name, dst / name, dirs_exist_ok=True)
++    write_json(base / "meta.json", {"rotulo": label, "faltando": missing, "em": now(),
++                                    **git_state()})
++    return missing
++
++
++def carry(cycle_id: str, src: str, dst: str, root: Path = CYCLES) -> dict[str, int]:
++    """Herda rótulos de `src` para `dst` onde o segmento é idêntico (mesmo id e
++    rev); grava em `dst/pending/` o que mudou e precisa do juiz."""
++    _, manifest = load_cycle(cycle_id, root)
++    cdir = cycle_dir(cycle_id, root)
++    src_cycle, _, src_label = src.rpartition(":")
++    src_dir = cycle_dir(src_cycle, root) if src_cycle else cdir
++    totals = {"herdados": 0, "pendentes": 0}
++    for short in shorts(manifest):
++        video, split = short["video"], short["split"]
++        rdir = run_dir(cdir, dst, video)
++        if not (rdir / "report.json").exists():
++            continue
++        old_segments, old_short = read_labels(labels_path(src_dir, src_label, split, video))
++        old_by_id = {r["segment_id"]: r for r in old_segments}
++        carried, pending = [], []
++        for seg in load_run(rdir)[1]:
++            old = old_by_id.get(seg.id)
++            if old is not None and old.get("rev") == seg.rev:
++                carried.append({**old, "herdado_de": src})
++            else:
++                pending.append(seg.id)
++        totals["herdados"] += len(carried)
++        totals["pendentes"] += len(pending)
++        if not pending and old_short is not None:
++            carried.append({**old_short, "herdado_de": src})
++        write_labels(labels_path(cdir, dst, split, video), carried)
++        pending_path = cdir / dst / "pending" / f"{video}.txt"
++        pending_path.parent.mkdir(parents=True, exist_ok=True)
++        pending_path.write_text("".join(f"{p}\n" for p in pending), encoding="utf-8")
++    return totals
++
++
++# ---------------------------------------------------------------- contagem
++
++
++def summarize(cycle_id: str, label: str, split: str, root: Path = CYCLES,
++              taxonomy_path: Path = TAXONOMY, human_root: Path = HUMAN_LABELS,
++              snapshot_label: str | None = None) -> dict[str, Any]:
++    """Classes de falha de um rótulo num split, com rótulo humano por cima do juiz."""
++    _, manifest = load_cycle(cycle_id, root)
++    cdir, par = cycle_dir(cycle_id, root), pair_name(manifest)
++    snap = snapshot_label or label
++    known = set(read_json(taxonomy_path)["classes"])
++    rule = manifest.get("elegibilidade", {"min_shorts": 3, "min_categorias": 2})
++    classes: dict[str, dict[str, Any]] = defaultdict(
++        lambda: {"corrigiria": 0, "escutar": 0, "shorts": set(), "categorias": set()})
++    verdicts: dict[str, int] = defaultdict(int)
++    per_short: dict[str, dict[str, int]] = {}
++    sources = {"juiz": 0, "humano": 0}
++    rejudged, unlabeled, incomplete = 0, [], []
++    for short in shorts(manifest, split):
++        video = short["video"]
++        raw, verdict = read_labels(labels_path(cdir, label, split, video))
++        if not raw:
++            unlabeled.append(video)
++            continue
++        human, human_verdicts = load_human(par, video, human_root)
++        rows = merge_human(raw, human)
++        rdir = run_dir(cdir, snap, video)
++        if (rdir / "report.json").exists():
++            segs = load_run(rdir)[1]
++            if len({r["segment_id"] for r in rows}) < len(segs):
++                incomplete.append(video)
++            human_verdict = human_verdicts.get(run_revision(segs))
++            if human_verdict is not None:
++                verdict = human_verdict
++        verdicts[(verdict or {}).get("short", "sem_veredito")] += 1
++        counts: dict[str, int] = defaultdict(int)
++        for row in rows:
++            sources[row["fonte"]] += 1
++            if row["fonte"] == "juiz" and "herdado_de" not in row:
++                rejudged += 1
++            if row.get("rotulo") not in PROBLEM_LABELS:
++                continue
++            name = row.get("classe") or "outro"
++            entry = classes[name]
++            entry[row["rotulo"]] += 1
++            entry["shorts"].add(video)
++            entry["categorias"].add(short.get("categoria") or "?")
++            counts[name] += 1
++        per_short[video] = dict(counts)
++    table = {
++        name: {"corrigiria": e["corrigiria"], "escutar": e["escutar"], "shorts": len(e["shorts"]),
++               "categorias": len(e["categorias"]),
++               "elegivel": len(e["shorts"]) >= rule["min_shorts"]
++               and len(e["categorias"]) >= rule["min_categorias"],
++               "na_taxonomia": name in known}
++        for name, e in classes.items()
++    }
++    return {"split": split, "classes": table, "shorts": dict(verdicts), "por_short": per_short,
++            "fontes": sources, "reavaliados_pelo_juiz": rejudged, "sem_rotulo": unlabeled,
++            "incompletos": incomplete, "regra": rule}
++
++
++def render_summary(s: dict[str, Any], detail: bool) -> str:
++    lines = [f"## {s['split']} — Shorts: " + ", ".join(f"{k} {v}" for k, v in
++                                                      sorted(s["shorts"].items())),
++             f"rótulos: juiz {s['fontes']['juiz']}, humano {s['fontes']['humano']}"]
++    if s["sem_rotulo"]:
++        lines.append(f"⚠ sem rótulos: {', '.join(s['sem_rotulo'])}")
++    if s["incompletos"]:
++        lines.append(f"⚠ rótulos incompletos: {', '.join(s['incompletos'])}")
++    ranked = sorted(s["classes"].items(),
++                    key=lambda kv: (-kv[1]["shorts"], -kv[1]["corrigiria"] - kv[1]["escutar"]))
++    if not detail:
++        by_family: dict[str, int] = defaultdict(int)
++        for name, c in ranked:
++            by_family[name.split(".")[0]] += c["corrigiria"] + c["escutar"]
++        lines.append("por família: " + ", ".join(f"{k} {v}" for k, v in sorted(by_family.items())))
++        return "\n".join(lines)
++    rule = s["regra"]
++    lines.append(f"elegível = ≥{rule['min_shorts']} Shorts e ≥{rule['min_categorias']} categorias")
++    lines.append("classe | corrigiria | escutar | Shorts | categorias | elegível")
++    for name, c in ranked:
++        tag = "" if c["na_taxonomia"] else " (fora da taxonomia)"
++        lines.append(f"{name}{tag} | {c['corrigiria']} | {c['escutar']} | {c['shorts']} | "
++                     f"{c['categorias']} | {'sim' if c['elegivel'] else 'não'}")
++    return "\n".join(lines)
++
++
++# ---------------------------------------------------------------- comparação
++
++
++def _objective(run_root: Path, videos: list[str]) -> dict[str, Any]:
++    cers, discarded, costs = [], 0.0, {}
++    for video in videos:
++        report_path = run_root / video / "report.json"
++        if not report_path.exists():
++            continue
++        report = read_json(report_path)
++        cers += [s["cer_final"] for s in report["segments"] if s.get("cer_final") is not None]
++        assembly = report.get("assembly") or {}
++        discarded += float(assembly.get("timeline_discarded_samples") or 0)
++        discarded += float(assembly.get("mix_discarded_samples") or 0)
++        timings = run_root / video / "stage_timings.json"
++        if timings.exists():
++            costs[video] = sum(float(v) for v in read_json(timings).values())
++    return {"cer_final_medio": sum(cers) / len(cers) if cers else None,
++            "amostras_descartadas": discarded, "custo_por_short": costs}
++
++
++def sign_test(deltas: list[int]) -> tuple[int, int, float]:
++    """(Shorts que melhoraram, que pioraram, p bilateral do teste do sinal)."""
++    better, worse = sum(d < 0 for d in deltas), sum(d > 0 for d in deltas)
++    n, k = better + worse, max(better, worse)
++    if n == 0:
++        return 0, 0, 1.0
++    tail = sum(math.comb(n, i) for i in range(k, n + 1)) / 2**n
++    return better, worse, min(1.0, 2 * tail)
++
++
++def _counts(summary: dict[str, Any]) -> dict[str, int]:
++    return {k: v["corrigiria"] + v["escutar"] for k, v in summary["classes"].items()}
++
++
++def _human_coverage(cdir: Path, cand: str, par: str, split_videos: list[tuple[str, str]],
++                    human_root: Path) -> tuple[int, int]:
++    """(segmentos que mudaram, quantos têm rótulo humano)."""
++    changed = covered = 0
++    for split, video in split_videos:
++        pending = set(read_pending(cdir, cand, video))
++        if not pending:
++            continue
++        human, _ = load_human(par, video, human_root)
++        rows, _ = read_labels(labels_path(cdir, cand, split, video))
++        for row in rows:
++            if row["segment_id"] in pending:
++                changed += 1
++                covered += (row["segment_id"], row.get("rev", "")) in human
++    return changed, covered
++
++
++def holdout_uses(manifest_path: str, root: Path = CYCLES) -> int:
++    uses = 0
++    for meta_path in root.glob("*/cycle.json"):
++        meta = read_json(meta_path)
++        if meta.get("manifest") == manifest_path and (meta_path.parent / "compare.json").exists():
++            uses += 1
++    return uses
++
++
++def compare(cycle_id: str, base: str, cand: str, targets: list[str], root: Path = CYCLES,
++            taxonomy_path: Path = TAXONOMY, human_root: Path = HUMAN_LABELS,
++            calib_root: Path = CALIBRATION) -> dict[str, Any]:
++    meta, manifest = load_cycle(cycle_id, root)
++    cdir, par = cycle_dir(cycle_id, root), pair_name(manifest)
++    tol = {**ACCEPT_DEFAULTS, **manifest.get("aceite", {})}
++    paired = f"{base}-par"
++    base_eff = paired if (cdir / paired / "labels").exists() else base
++    calib = load_calibration(par, meta.get("juiz_modelo"), calib_root)
++    trusted = trusted_classes(calib)
++    flip, noise_measured = noise_rate(calib)
++    r: dict[str, Any] = {"alvo": targets, "base_usada": base_eff, "splits": {}, "regressoes": [],
++                         "avisos": [], "ruido": flip, "ruido_medido": noise_measured,
++                         "alvo_calibrado": all(t in trusted for t in targets)}
++    if calib is None:
++        r["avisos"].append("juiz sem calibração: rode /ciclo calibrar")
++    elif not calib.get("valida"):
++        r["avisos"].append("calibração é de outro modelo de juiz: recalibre")
++    if not noise_measured:
++        r["avisos"].append(f"ruído do juiz não medido; usando {flip} por padrão")
++    for split in SPLITS:
++        sb = summarize(cycle_id, base_eff, split, root, taxonomy_path, human_root,
++                       snapshot_label=base)
++        sc = summarize(cycle_id, cand, split, root, taxonomy_path, human_root)
++        if sc["sem_rotulo"] or sc["incompletos"] or sb["sem_rotulo"]:
++            r["avisos"].append(f"{split}: rótulos faltando ou incompletos")
++        cb, cc = _counts(sb), _counts(sc)
++        videos = [s["video"] for s in shorts(manifest, split)]
++        ob, oc = _objective(cdir / base / "dub", videos), _objective(cdir / cand / "dub", videos)
++        noise_tol = flip * sc["reavaliados_pelo_juiz"]
++        target_b = sum(cb.get(t, 0) for t in targets)
++        target_c = sum(cc.get(t, 0) for t in targets)
++        deltas = [sum(sc["por_short"].get(v, {}).get(t, 0) for t in targets)
++                  - sum(sb["por_short"].get(v, {}).get(t, 0) for t in targets) for v in videos]
++        better, worse, p_value = sign_test(deltas)
++        s = r["splits"][split] = {
++            "alvo": (target_b, target_c), "tolerancia_ruido": round(noise_tol, 2),
++            "sinal": {"melhoraram": better, "pioraram": worse, "p": round(p_value, 3)},
++            "classes": {k: (cb.get(k, 0), cc.get(k, 0)) for k in sorted(set(cb) | set(cc))},
++            "publicaria": (sb["shorts"].get("publicaria", 0), sc["shorts"].get("publicaria", 0)),
++            "objetivas": {"base": ob, "candidato": oc},
++        }
++        for name, (b, c) in s["classes"].items():
++            if name in targets:
++                continue
++            if c - b > max(tol["tolerancia_abs"], tol["tolerancia_rel"] * b):
++                note = "" if name in trusted else " (juiz não calibrado nesta classe)"
++                r["regressoes"].append(f"{split}: {name} {b} → {c}{note}")
++        pub_b, pub_c = s["publicaria"]
++        if pub_c < pub_b:
++            r["regressoes"].append(f"{split}: Shorts publicáveis {pub_b} → {pub_c}")
++        cer_b, cer_c = ob["cer_final_medio"], oc["cer_final_medio"]
++        if cer_b is not None and cer_c is not None and cer_c > cer_b + tol["cer_final_margem"]:
++            r["regressoes"].append(f"{split}: CER final médio {cer_b:.3f} → {cer_c:.3f}")
++        dis_b, dis_c = ob["amostras_descartadas"], oc["amostras_descartadas"]
++        if dis_c > dis_b * (1 + tol["descarte_margem_rel"]) and dis_c > dis_b:
++            r["regressoes"].append(
++                f"{split}: fala descartada {dis_b:.0f} → {dis_c:.0f} amostras")
++        common = sorted(set(ob["custo_por_short"]) & set(oc["custo_por_short"]))
++        if common:
++            cost_b = sum(ob["custo_por_short"][v] for v in common) / len(common)
++            cost_c = sum(oc["custo_por_short"][v] for v in common) / len(common)
++            s["custo_medio_s"] = (round(cost_b, 1), round(cost_c, 1))
++            if cost_c > cost_b * (1 + tol["custo_margem_rel"]) and \
++                    cost_c - cost_b > tol["custo_margem_abs_s"]:
++                r["regressoes"].append(
++                    f"{split}: custo por Short {cost_b:.0f} s → {cost_c:.0f} s")
++        else:
++            r["avisos"].append(f"{split}: custo não medido (stage_timings.json ausente)")
++    prefs_path = cdir / "preferencias_juiz.json"
++    if prefs_path.exists():
++        prefs = read_json(prefs_path)
++        r["preferencias_juiz"] = prefs
++        if prefs.get("base", 0) > prefs.get("candidato", 0):
++            r["regressoes"].append(f"o juiz (cego) preferiu a base: {prefs}")
++    human_prefs = [p for p in read_jsonl(human_root / par / "preferencias.jsonl")
++                   if p.get("ciclo") == cycle_id]
++    if human_prefs:
++        tally = {k: sum(p["preferido"] == k for p in human_prefs)
++                 for k in ("base", "candidato", "igual")}
++        r["preferencias_humanas"] = tally
++        if tally["base"] > tally["candidato"]:
++            r["regressoes"].append(f"você (cego) preferiu a base: {tally}")
++    if not r["alvo_calibrado"]:
++        split_videos = [(s["split"], s["video"]) for s in shorts(manifest)
++                        if s.get("split") in SPLITS]
++        changed, covered = _human_coverage(cdir, cand, par, split_videos, human_root)
++        r["cobertura_humana"] = (covered, changed)
++    uses = holdout_uses(meta["manifest"], root) + (0 if (cdir / "compare.json").exists() else 1)
++    limit = manifest.get("higiene", {}).get("max_usos_holdout", MAX_HOLDOUT_USES)
++    if uses > limit:
++        r["avisos"].append(f"holdout já usado em {uses} ciclos (limite {limit}): renove-o")
++    r["veredito"] = _verdict(r)
++    write_json(cdir / "compare.json", {"em": now(), **r})
++    return r
++
++
++def _verdict(r: dict[str, Any]) -> str:
++    dev, hold = r["splits"]["dev"], r["splits"]["holdout"]
++    (dev_b, dev_c), (hold_b, hold_c) = dev["alvo"], hold["alvo"]
++    if any("faltando ou incompletos" in a for a in r["avisos"]):
++        return "INCOMPLETO: termine os rótulos antes de decidir"
++    if not r["alvo_calibrado"]:
++        covered, changed = r["cobertura_humana"]
++        if covered < changed:
++            return (f"PRECISA DE RÓTULO HUMANO: classe-alvo sem calibração; "
++                    f"{changed - covered} de {changed} segmentos que mudaram sem seu rótulo")
++    if hold_c > hold_b:
++        return "REJEITAR: a classe-alvo piorou no holdout (sinal de overfitting)"
++    if r["regressoes"]:
++        return "REJEITAR: regressões (veja a lista)"
++    if dev_b - dev_c <= dev["tolerancia_ruido"] or dev_c >= dev_b:
++        return "INCONCLUSIVO: a melhora no dev não passa do ruído do juiz"
++    if dev["sinal"]["melhoraram"] <= dev["sinal"]["pioraram"]:
++        return "INCONCLUSIVO: a melhora não aparece em mais Shorts do que a piora"
++    if hold_b == 0 and hold_c == 0:
++        return ("ACEITAR COM RESSALVA: holdout sem casos da classe-alvo; "
++                "generalização não verificada")
++    return "ACEITAR, sujeito à escuta humana"
++
++
++def render_compare(r: dict[str, Any]) -> str:
++    lines = [f"# Veredito: {r['veredito']}", f"classe-alvo: {', '.join(r['alvo'])} "
++             f"({'calibrada' if r['alvo_calibrado'] else 'não calibrada'}) · base: "
++             f"{r['base_usada']} · ruído do juiz: {r['ruido']}"
++             f"{'' if r['ruido_medido'] else ' (padrão)'}"]
++    if "cobertura_humana" in r:
++        lines.append("segmentos que mudaram com rótulo humano: "
++                     f"{r['cobertura_humana'][0]}/{r['cobertura_humana'][1]}")
++    for key, title in (("preferencias_juiz", "juiz (cego)"), ("preferencias_humanas", "você")):
++        if key in r:
++            lines.append(f"preferência {title}: {r[key]}")
++    for split, s in r["splits"].items():
++        (b, c), sg = s["alvo"], s["sinal"]
++        pb, pc = s["publicaria"]
++        lines += ["", f"## {split}",
++                  f"alvo: {b} → {c} (ruído tolerado {s['tolerancia_ruido']}) · Shorts que "
++                  f"melhoraram {sg['melhoraram']}, pioraram {sg['pioraram']} (p={sg['p']})",
++                  f"Shorts publicáveis: {pb} → {pc}"]
++        ob, oc = s["objetivas"]["base"], s["objetivas"]["candidato"]
++        if ob["cer_final_medio"] is not None and oc["cer_final_medio"] is not None:
++            lines.append(f"CER final médio: {ob['cer_final_medio']:.3f} → "
++                         f"{oc['cer_final_medio']:.3f}")
++        lines.append(f"fala descartada: {ob['amostras_descartadas']:.0f} → "
++                     f"{oc['amostras_descartadas']:.0f} amostras")
++        if "custo_medio_s" in s:
++            lines.append(f"custo médio por Short: {s['custo_medio_s'][0]} s → "
++                         f"{s['custo_medio_s'][1]} s")
++        if split == "dev":
++            lines += [f"{k}: {x} → {y}" for k, (x, y) in s["classes"].items() if x != y]
++    if r["regressoes"]:
++        lines += ["", "## Regressões", *[f"- {x}" for x in r["regressoes"]]]
++    if r["avisos"]:
++        lines += ["", "## Avisos", *[f"- {x}" for x in r["avisos"]]]
++    return "\n".join(lines)
++
++
++# ---------------------------------------------------------------- higiene
++
++
++def usage_path(manifest_path: Path) -> Path:
++    return manifest_path.with_suffix(".usage.jsonl")
++
++
++def log_exam(cycle_id: str, label: str, root: Path = CYCLES) -> int:
++    meta, _ = load_cycle(cycle_id, root)
++    path = usage_path(Path(meta["manifest"]))
++    append_jsonl(path, {"tipo": "exame", "ciclo": cycle_id, "rotulo": label, "em": now()})
++    return sum(1 for row in read_jsonl(path) if row.get("tipo") == "exame")
++
++
++def exam_result(cycle_id: str, label: str, root: Path = CYCLES,
++                human_root: Path = HUMAN_LABELS) -> dict[str, Any]:
++    """Taxa de publicação no exame, só com veredito humano (é a métrica do portão)."""
++    _, manifest = load_cycle(cycle_id, root)
++    cdir, par = cycle_dir(cycle_id, root), pair_name(manifest)
++    result = {"publicaria": 0, "nao_publicaria": 0, "sem_veredito_humano": []}
++    for short in shorts(manifest, "exame"):
++        rdir = run_dir(cdir, label, short["video"])
++        if not (rdir / "report.json").exists():
++            result["sem_veredito_humano"].append(short["video"])
++            continue
++        _, verdicts = load_human(par, short["video"], human_root)
++        verdict = verdicts.get(run_revision(load_run(rdir)[1]))
++        if verdict is None:
++            result["sem_veredito_humano"].append(short["video"])
++        else:
++            result[verdict["short"]] += 1
++    return result
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="Mecânica do ciclo de qualidade")
++    sub = parser.add_subparsers(dest="cmd", required=True)
++    p = sub.add_parser("new")
++    p.add_argument("--manifest", type=Path, required=True)
++    p.add_argument("--slug")
++    for name in ("snapshot", "calibrate"):
++        p = sub.add_parser(name)
++        p.add_argument("cycle")
++        p.add_argument("label")
++        if name == "calibrate":
++            p.add_argument("--repeat", help="segundo julgamento dos mesmos Shorts (ruído)")
++        else:
++            p.add_argument("--marco", action="store_true", help="só o exame selado")
++    p = sub.add_parser("carry")
++    p.add_argument("cycle")
++    p.add_argument("src")
++    p.add_argument("dst")
++    p = sub.add_parser("summary")
++    p.add_argument("cycle")
++    p.add_argument("label")
++    p.add_argument("--split", choices=SPLITS)
++    p.add_argument("--marco", action="store_true", help="resultado do exame selado")
++    for name in ("blind", "unblind", "compare"):
++        p = sub.add_parser(name)
++        p.add_argument("cycle")
++        p.add_argument("base")
++        p.add_argument("candidate")
++        if name == "compare":
++            p.add_argument("--alvo", required=True, help="classes-alvo separadas por vírgula")
++    p = sub.add_parser("usage")
++    p.add_argument("--manifest", type=Path, required=True)
++    args = parser.parse_args()
++
++    if args.cmd == "new":
++        print(new_cycle(args.manifest, args.slug))
++    elif args.cmd == "snapshot":
++        missing = snapshot(args.cycle, args.label,
++                           splits=("exame",) if args.marco else SPLITS)
++        if missing:
++            print(f"sem execução em .cache/dub/: {', '.join(missing)}")
++            sys.exit(1)
++        print(f"snapshot '{args.label}' gravado")
++    elif args.cmd == "carry":
++        print(carry(args.cycle, args.src, args.dst))
++    elif args.cmd == "summary" and args.marco:
++        uses = log_exam(args.cycle, args.label)
++        print(f"exame usado {uses} vez(es) — use só em marcos")
++        print(exam_result(args.cycle, args.label))
++    elif args.cmd == "summary":
++        for split in [args.split] if args.split else list(SPLITS):
++            # Holdout sai só agregado: o detalhe por classe orientaria o plano.
++            print(render_summary(summarize(args.cycle, args.label, split), split == "dev"),
++                  end="\n\n")
++    elif args.cmd == "calibrate":
++        print(render_calibration(calibrate(args.cycle, args.label, args.repeat)))
++    elif args.cmd == "blind":
++        print(blind_prepare(args.cycle, args.base, args.candidate))
++    elif args.cmd == "unblind":
++        print(blind_unblind(args.cycle, args.base, args.candidate))
++    elif args.cmd == "compare":
++        r = compare(args.cycle, args.base, args.candidate, args.alvo.split(","))
++        print(render_compare(r))
++        sys.exit(0 if r["veredito"].startswith("ACEITAR") else 1)
++    elif args.cmd == "usage":
++        uses = holdout_uses(str(args.manifest))
++        exams = [row for row in read_jsonl(usage_path(args.manifest)) if row.get("tipo") == "exame"]
++        print(f"holdout usado em {uses} ciclo(s); exame usado {len(exams)} vez(es)")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/judge_audio.py b/scripts/judge_audio.py
+new file mode 100644
+index 0000000..dd81194
+--- /dev/null
++++ b/scripts/judge_audio.py
+@@ -0,0 +1,360 @@
++"""Sinais de voz e emoção para o subagente `dub-judge` (ferramenta de dev).
++
++O juiz não ouve áudio. Este script mede, na CPU e só com o que a execução já
++deixou em `.cache/dub/<video>/`, os sinais que ele consegue ler como texto:
++
++- registro: F0 mediano da fonte vs. do dublado e a voz do banco usada
++  (`synth_jobs.json` + gênero em `voices.json`). F0 não é gênero: vozes
++  masculinas do banco chegam a ~200 Hz;
++- locutor: quanto o F0 do dublado varia entre segmentos do mesmo locutor, e
++  se dois locutores receberam a mesma voz (T0.31);
++- forma da entonação: contorno de F0 em sparkline, fonte e dublado na mesma
++  escala;
++- pergunta sim/não: em idiomas como o pt-BR ela só se distingue da
++  afirmação pela entonação. Pergunta que termina sem pico de F0 pode soar
++  como afirmação. A regra é dado do perfil (`evals/languages/<codigo>.json`),
++  não código: idioma novo = perfil novo;
++- emoção (emotion2vec) e variação de F0 que o `report.json` já tem.
++
++Volume por segmento não é comparado: `match_speech_levels` iguala o nível do
++dublado ao da fonte antes da mixagem, então seria tautológico (a mesma
++armadilha da T0.20).
++
++Nada aqui é flag de produto nem limiar calibrado. Um sinal só vira flag em
++`quality.py` depois de medido contra os rótulos humanos da T0.28.
++
++Uso:
++    python -m scripts.judge_audio .cache/dub/<video> [--lang pt-BR]
++
++A escuta humana (original × dublado, com rotulagem) fica em `scripts.listen`.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import math
++import re
++from collections import defaultdict
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++import librosa
++import numpy as np
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++VOICE_BANK_MANIFEST = REPO_ROOT / "assets/voices/bank/voices.json"
++LANGUAGES_DIR = REPO_ROOT / "evals/languages"
++
++ANALYSIS_SR = 16000
++PYIN_FRAME = 2048
++PYIN_HOP = 256
++HOP_SECONDS = PYIN_HOP / ANALYSIS_SR
++FMIN_HZ = 65.0  # mesma faixa de `prosody.extract_pitch_contour`
++FMAX_HZ = 1000.0
++MIN_VOICED_FRAMES = 5
++
++SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
++SPARK_WINDOW_SECONDS = 0.25
++SPARK_MAX_CHARS = 40
++SPARK_RANGE_ST = 6.0
++FINAL_TAIL_SECONDS = 0.8
++
++# Pontos de partida para o juiz decidir o que mandar para escuta.
++# Não são limiares de flag; nada aqui foi calibrado contra rótulo humano.
++REGISTER_GAP_ST = 5.0
++SPEAKER_DRIFT_ST = 3.0
++POLAR_PEAK_MIN_ST = 2.0
++FLATNESS_RATIO = 0.5  # mesma régua de `quality.PITCH_FLATNESS_RATIO`
++
++
++
++@dataclass
++class SegmentVoice:
++    id: str
++    start: float
++    end: float
++    dub_text: str
++    speaker: str | None = None
++    voice: str | None = None
++    emotion: dict[str, Any] | None = None
++    pitch_std_source: float | None = None
++    pitch_std_dub: float | None = None
++    source_hz: float | None = None
++    dub_hz: float | None = None
++    source_shape: str = ""
++    dub_shape: str = ""
++    dub_final_peak_st: float | None = None
++
++
++# ---------------------------------------------------------------- medidas puras
++
++
++def f0_track(audio: np.ndarray) -> np.ndarray:
++    """F0 em Hz por quadro (áudio a ANALYSIS_SR); NaN onde não há voz."""
++    if len(audio) < PYIN_FRAME:
++        return np.full(0, np.nan)
++    f0, voiced, _ = librosa.pyin(
++        audio.astype(np.float32),
++        fmin=FMIN_HZ,
++        fmax=FMAX_HZ,
++        sr=ANALYSIS_SR,
++        frame_length=PYIN_FRAME,
++        hop_length=PYIN_HOP,
++    )
++    return np.where(voiced, f0, np.nan)
++
++
++def median_hz(f0: np.ndarray) -> float | None:
++    voiced = f0[~np.isnan(f0)]
++    return float(np.median(voiced)) if voiced.size >= MIN_VOICED_FRAMES else None
++
++
++def semitone_gap(from_hz: float | None, to_hz: float | None) -> float | None:
++    if not from_hz or not to_hz:
++        return None
++    return 12.0 * math.log2(to_hz / from_hz)
++
++
++def window_contour(f0: np.ndarray, window_seconds: float = SPARK_WINDOW_SECONDS) -> np.ndarray:
++    """Semitons relativos à mediana vozeada do próprio trecho, por janela; NaN sem voz."""
++    step = max(1, round(window_seconds / HOP_SECONDS))
++    n_windows = max(1, math.ceil(len(f0) / step))
++    ref = median_hz(f0)
++    if ref is None:
++        return np.full(n_windows, np.nan)
++    st = 12.0 * np.log2(f0 / ref)
++    out = np.full(n_windows, np.nan)
++    for i in range(n_windows):
++        window = st[i * step : (i + 1) * step]
++        window = window[~np.isnan(window)]
++        if window.size:
++            out[i] = window.mean()
++    return out
++
++
++def sparkline(contour: np.ndarray, max_chars: int = SPARK_MAX_CHARS) -> str:
++    """Contorno em blocos, escala fixa de ±SPARK_RANGE_ST; `·` = sem voz."""
++    if len(contour) > max_chars:
++        edges = np.linspace(0, len(contour), max_chars + 1).astype(int)
++        merged = []
++        for a, b in zip(edges[:-1], edges[1:], strict=True):
++            chunk = contour[a:b]
++            chunk = chunk[~np.isnan(chunk)]
++            merged.append(chunk.mean() if chunk.size else np.nan)
++        contour = np.array(merged)
++    top = len(SPARK_BLOCKS) - 1
++    chars = []
++    for v in contour:
++        if np.isnan(v):
++            chars.append("·")
++            continue
++        clipped = float(np.clip(v, -SPARK_RANGE_ST, SPARK_RANGE_ST))
++        level = (clipped + SPARK_RANGE_ST) / (2 * SPARK_RANGE_ST)
++        chars.append(SPARK_BLOCKS[int(round(level * top))])
++    return "".join(chars)
++
++
++def final_peak_st(f0: np.ndarray, tail_seconds: float = FINAL_TAIL_SECONDS) -> float | None:
++    """Pico de F0 (p90, robusto a erro de oitava) no fim da fala, em semitons
++    acima da mediana do trecho. Pergunta sim/não em pt-BR sobe na última
++    sílaba tônica; afirmação tende a cair."""
++    ref = median_hz(f0)
++    voiced_idx = np.flatnonzero(~np.isnan(f0))
++    if ref is None or voiced_idx.size == 0:
++        return None
++    last = int(voiced_idx[-1])
++    tail = f0[max(0, last - round(tail_seconds / HOP_SECONDS)) : last + 1]
++    tail = tail[~np.isnan(tail)]
++    return float(12.0 * math.log2(np.percentile(tail, 90) / ref))
++
++
++def load_language(code: str, directory: Path = LANGUAGES_DIR) -> dict[str, Any]:
++    path = directory / f"{code}.json"
++    if not path.exists():
++        raise FileNotFoundError(f"perfil de idioma {path} não existe")
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def question_start_regex(profile: dict[str, Any]) -> re.Pattern[str] | None:
++    """Regex das palavras interrogativas do perfil, ou None se o idioma não
++    marca pergunta sim/não pela entonação (a checagem não se aplica)."""
++    rules = profile.get("perguntas") or {}
++    if not rules.get("polar_marcada_por_entonacao"):
++        return None
++    words = sorted(rules.get("inicio_interrogativo", []), key=len, reverse=True)
++    alternatives = "|".join(r"\s+".join(map(re.escape, w.split())) for w in words)
++    return re.compile(rf"^({alternatives})\b") if alternatives else re.compile(r"^\b\B")
++
++
++def is_polar_question(text: str, wh_start: re.Pattern[str]) -> bool:
++    """A última frase é pergunta sim/não (não começa com palavra interrogativa)."""
++    stripped = text.strip()
++    if not stripped.endswith("?"):
++        return False
++    last = re.split(r"(?<=[.!?…])\s+", stripped)[-1]
++    last = last.lstrip("¿¡\"'(—–-. ").lower()
++    return wh_start.match(last) is None
++
++
++# ---------------------------------------------------------------- execução
++
++
++def _read_json(path: Path) -> Any:
++    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
++
++
++def load_voice_genders(manifest: Path = VOICE_BANK_MANIFEST) -> dict[str, str]:
++    return {v["id"]: v.get("gender", "?") for v in _read_json(manifest) or []}
++
++
++def load_segments(cache_dir: Path) -> list[SegmentVoice]:
++    """Dados baratos (sem áudio): tempos, texto, locutor, voz e emoção."""
++    report = _read_json(cache_dir / "report.json")
++    if report is None:
++        raise FileNotFoundError(f"{cache_dir / 'report.json'} não existe; rode scripts/dub.py")
++    speakers = {s["id"]: s.get("speaker") for s in _read_json(cache_dir / "segments.json") or []}
++    voices = {
++        j["id"]: Path(j["reference_audio_path"]).stem
++        for j in _read_json(cache_dir / "synth_jobs.json") or []
++        if j.get("reference_audio_path")
++    }
++    return [
++        SegmentVoice(
++            id=s["id"],
++            start=float(s["t_inicio"]),
++            end=float(s["t_fim"]),
++            dub_text=s.get("traducao") or "",
++            speaker=speakers.get(s["id"]),
++            voice=voices.get(s["id"]),
++            emotion=s.get("emotion_match"),
++            pitch_std_source=s.get("pitch_std_source"),
++            pitch_std_dub=s.get("pitch_std_dub"),
++        )
++        for s in report["segments"]
++    ]
++
++
++def measure_pitch(cache_dir: Path, segments: list[SegmentVoice]) -> None:
++    """Preenche F0 e contornos (librosa.pyin na CPU, ~3 s por 10 s de áudio)."""
++    source_path = cache_dir / "vocals.wav"
++    if not source_path.exists():
++        source_path = cache_dir / "audio.wav"
++    for seg in segments:
++        if source_path.exists():
++            src, _ = librosa.load(
++                source_path, sr=ANALYSIS_SR, offset=seg.start, duration=seg.end - seg.start
++            )
++            f0 = f0_track(src)
++            seg.source_hz, seg.source_shape = median_hz(f0), sparkline(window_contour(f0))
++        dub_path = cache_dir / "final_segments" / f"{seg.id}.wav"
++        if dub_path.exists():
++            dub, _ = librosa.load(dub_path, sr=ANALYSIS_SR)
++            f0 = f0_track(dub)
++            seg.dub_hz, seg.dub_shape = median_hz(f0), sparkline(window_contour(f0))
++            seg.dub_final_peak_st = final_peak_st(f0)
++
++
++# ---------------------------------------------------------------- saída
++
++
++def _hz(v: float | None) -> str:
++    return f"{v:.0f} Hz" if v else "—"
++
++
++def _median(values: list[float | None]) -> float | None:
++    present = [v for v in values if v]
++    return float(np.median(present)) if present else None
++
++
++def speaker_summary(segments: list[SegmentVoice], genders: dict[str, str]) -> list[str]:
++    by_speaker: dict[str, list[SegmentVoice]] = defaultdict(list)
++    for s in segments:
++        by_speaker[s.speaker or "?"].append(s)
++    speakers_by_voice: dict[str, set[str]] = defaultdict(set)
++    lines = []
++    for speaker, segs in sorted(by_speaker.items()):
++        voices = sorted({s.voice for s in segs if s.voice})
++        for v in voices:
++            speakers_by_voice[v].add(speaker)
++        voice_txt = ", ".join(f"{v} ({genders.get(v, '?')})" for v in voices) or "?"
++        src, dub = _median([s.source_hz for s in segs]), _median([s.dub_hz for s in segs])
++        line = f"{speaker} ({len(segs)} seg): voz {voice_txt} · fonte {_hz(src)} · dub {_hz(dub)}"
++        gap = semitone_gap(src, dub)
++        if gap is not None:
++            line += f" ({gap:+.1f} st)" + ("  ⚠ registro" if abs(gap) > REGISTER_GAP_ST else "")
++        drifts = [abs(semitone_gap(dub, s.dub_hz) or 0.0) for s in segs if s.dub_hz]
++        if drifts:
++            drift = max(drifts)
++            line += f" · desvio máx. entre segmentos {drift:.1f} st"
++            line += "  ⚠ instável" if drift > SPEAKER_DRIFT_ST else ""
++        lines.append(line)
++    for voice, speakers in sorted(speakers_by_voice.items()):
++        if len(speakers) > 1:
++            lines.append(f"⚠ a voz {voice} foi usada para {', '.join(sorted(speakers))}")
++    return lines
++
++
++def render(
++    name: str,
++    segments: list[SegmentVoice],
++    genders: dict[str, str],
++    wh_start: re.Pattern[str] | None = None,
++) -> str:
++    lines = [f"# {name} — sinais de voz e emoção (medidos, não ouvidos)", "", "## Por locutor"]
++    lines += speaker_summary(segments, genders)
++    lines += ["", "## Por segmento"]
++    for s in segments:
++        head = f"{s.id} {s.start:.2f}–{s.end:.2f}"
++        head += (f" {s.speaker}" if s.speaker else "") + (f" voz {s.voice}" if s.voice else "")
++        lines.append(head)
++        reg = f"  F0: fonte {_hz(s.source_hz)} · dub {_hz(s.dub_hz)}"
++        gap = semitone_gap(s.source_hz, s.dub_hz)
++        if gap is not None:
++            reg += f" ({gap:+.1f} st)" + ("  ⚠ registro" if abs(gap) > REGISTER_GAP_ST else "")
++        lines.append(reg)
++        if s.source_shape or s.dub_shape:
++            lines.append(f"  forma: fonte {s.source_shape or '—'}")
++            lines.append(f"         dub   {s.dub_shape or '—'}")
++        if s.pitch_std_source and s.pitch_std_dub is not None:
++            ratio = s.pitch_std_dub / s.pitch_std_source
++            flat = "  ⚠ achatado" if ratio < FLATNESS_RATIO else ""
++            lines.append(
++                f"  variação F0: fonte {s.pitch_std_source:.1f} st · "
++                f"dub {s.pitch_std_dub:.1f} st ({ratio:.2f}x){flat}"
++            )
++        if s.emotion:
++            e = s.emotion
++            lines.append(
++                f"  emoção: fonte {e.get('source_emotion')} {e.get('source_emotion_score', 0):.2f}"
++                f" · dub {e.get('dub_emotion')} {e.get('dub_emotion_score', 0):.2f}"
++                f" (sim {e.get('similarity', 0):.2f})"
++            )
++        if wh_start is not None and is_polar_question(s.dub_text, wh_start):
++            peak = s.dub_final_peak_st
++            note = "—" if peak is None else f"{peak:+.1f} st"
++            if peak is not None and peak < POLAR_PEAK_MIN_ST:
++                note += "  ⚠ pode soar como afirmação"
++            lines.append(f"  pergunta sim/não no fim: pico final do dub {note}")
++    if wh_start is None:
++        lines += ["", "(checagem de pergunta desligada: o perfil do idioma não a define)"]
++    if not any(s.emotion for s in segments):
++        lines += ["", "(emoção não medida nesta execução: rode dub.py com --emotion-match)"]
++    return "\n".join(lines)
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
++    parser.add_argument("cache_dir", type=Path, help=".cache/dub/<video>")
++    parser.add_argument("--lang", default="pt-BR", help="perfil em evals/languages/")
++    args = parser.parse_args()
++
++    segments = load_segments(args.cache_dir)
++    measure_pitch(args.cache_dir, segments)
++    wh_start = question_start_regex(load_language(args.lang))
++    print(render(args.cache_dir.name, segments, load_voice_genders(), wh_start))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/judge_packet.py b/scripts/judge_packet.py
+new file mode 100644
+index 0000000..9ddd018
+--- /dev/null
++++ b/scripts/judge_packet.py
+@@ -0,0 +1,213 @@
++"""Pacote de revisão compacto para o subagente `dub-judge` (ferramenta de dev).
++
++Lê o que uma execução de `scripts/dub.py` já deixou em disco e imprime, por
++segmento, só o que um revisor de tradução precisa: tempo, locutor, inglês,
++pt-BR usado, transcrição do áudio mixado e flags ligadas. Não chama modelo,
++não toca no Pod e não faz parte do caminho de geração — é só leitura de
++artefato, para o juiz não gastar contexto com o `report.json` inteiro.
++
++Entradas aceitas (em qualquer combinação no modo A/B):
++- diretório de cache (`.cache/dub/<video>/`): usa `report.json` e, se
++  existir, `segments.json` (locutor);
++- `report.json` direto;
++- `videos/dublados/<video>__<variante>_traducao.json` (só texto).
++
++Uso:
++    python -m scripts.judge_packet .cache/dub/<video>
++    python -m scripts.judge_packet A_traducao.json B_traducao.json
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++# Fração mínima de sobreposição (sobre o segmento mais curto) para parear
++# segmentos de duas execuções cuja segmentação mudou.
++MIN_OVERLAP_RATIO = 0.5
++
++
++@dataclass(frozen=True)
++class ReviewSegment:
++    id: str
++    start: float
++    end: float
++    source_text: str
++    dub_text: str
++    speaker: str | None = None
++    asr_text: str | None = None
++    cer_final: float | None = None
++    target_seconds: float | None = None
++    achieved_seconds: float | None = None
++    flags: tuple[str, ...] = ()
++    audio_sha: str | None = None
++
++    @property
++    def rev(self) -> str:
++        return segment_revision(self.dub_text, self.audio_sha)
++
++
++def segment_revision(text: str, audio_sha: str | None = None) -> str:
++    """Hash curto do texto dublado e, quando houver, do áudio do segmento.
++
++    Rótulo com `rev` diferente do segmento atual está velho. Segmento com o
++    mesmo `rev` em duas execuções é idêntico: o ciclo herda o rótulo em vez
++    de pedir ao juiz de novo (menos custo, menos ruído do juiz).
++    """
++    key = " ".join(text.split()) + (f"|{audio_sha}" if audio_sha else "")
++    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
++
++
++def text_revision(text: str) -> str:
++    return segment_revision(text)
++
++
++def run_revision(segments: list[ReviewSegment]) -> str:
++    """Hash de uma execução inteira: o veredito do Short vale para este conjunto exato."""
++    key = "|".join(f"{s.id}:{s.rev}" for s in segments)
++    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
++
++
++def _audio_sha(path: Path) -> str | None:
++    return hashlib.sha1(path.read_bytes()).hexdigest()[:12] if path.exists() else None
++
++
++def active_flags(flags: dict[str, Any]) -> tuple[str, ...]:
++    """Flags ligadas, sem os marcadores `*_not_computed` (stubs)."""
++    return tuple(k for k, v in flags.items() if v is True and not k.endswith("_not_computed"))
++
++
++def _from_report(
++    report: dict[str, Any], speakers: dict[str, str], audio_dir: Path | None = None
++) -> list[ReviewSegment]:
++    return [
++        ReviewSegment(
++            id=s["id"],
++            start=float(s["t_inicio"]),
++            end=float(s["t_fim"]),
++            source_text=s.get("texto_original") or "",
++            dub_text=s.get("traducao") or "",
++            speaker=speakers.get(s["id"]),
++            asr_text=s.get("hipotese_final"),
++            cer_final=s.get("cer_final"),
++            target_seconds=s.get("target_seconds"),
++            achieved_seconds=s.get("achieved_seconds"),
++            flags=active_flags(s.get("flags") or {}),
++            audio_sha=_audio_sha(audio_dir / f"{s['id']}.wav") if audio_dir else None,
++        )
++        for s in report["segments"]
++    ]
++
++
++def _from_traducao(items: list[dict[str, Any]]) -> list[ReviewSegment]:
++    return [
++        ReviewSegment(
++            id=s["id"],
++            start=float(s["t_inicio"]),
++            end=float(s["t_fim"]),
++            source_text=s.get("texto_original") or "",
++            dub_text=s.get("traducao_usada") or "",
++        )
++        for s in items
++    ]
++
++
++def load_run(path: Path) -> tuple[str, list[ReviewSegment]]:
++    """Carrega uma execução e devolve (nome, segmentos)."""
++    if path.is_dir():
++        speakers: dict[str, str] = {}
++        seg_path = path / "segments.json"
++        if seg_path.exists():
++            for s in json.loads(seg_path.read_text(encoding="utf-8")):
++                if s.get("speaker"):
++                    speakers[s["id"]] = s["speaker"]
++        report = json.loads((path / "report.json").read_text(encoding="utf-8"))
++        return path.name, _from_report(report, speakers, path / "final_segments")
++    data = json.loads(path.read_text(encoding="utf-8"))
++    if isinstance(data, dict) and "segments" in data:
++        return path.parent.name, _from_report(data, {})
++    return path.stem.removesuffix("_traducao"), _from_traducao(data)
++
++
++def _overlap(a: ReviewSegment, b: ReviewSegment) -> float:
++    inter = min(a.end, b.end) - max(a.start, b.start)
++    shortest = min(a.end - a.start, b.end - b.start)
++    return inter / shortest if inter > 0 and shortest > 0 else 0.0
++
++
++def pair_segments(
++    a: list[ReviewSegment], b: list[ReviewSegment]
++) -> tuple[list[tuple[ReviewSegment, list[ReviewSegment]]], list[ReviewSegment]]:
++    """Pareia por sobreposição de tempo (a segmentação pode ter mudado).
++
++    Devolve os pares (segmento de A, segmentos de B) e os segmentos de B
++    que não casaram com nenhum de A.
++    """
++    pairs = [(sa, [sb for sb in b if _overlap(sa, sb) >= MIN_OVERLAP_RATIO]) for sa in a]
++    matched = {sb.id for _, sbs in pairs for sb in sbs}
++    return pairs, [sb for sb in b if sb.id not in matched]
++
++
++def _span(s: ReviewSegment) -> str:
++    return f"{s.id} {s.start:.2f}–{s.end:.2f}"
++
++
++def render_single(name: str, segments: list[ReviewSegment]) -> str:
++    lines = [f"# {name} — {len(segments)} segmentos"]
++    for s in segments:
++        head = _span(s) + (f" {s.speaker}" if s.speaker else "") + f" | rev {s.rev}"
++        lines += [head, f"  EN : {s.source_text}", f"  PT : {s.dub_text}"]
++        if s.asr_text is not None:
++            cer = f" (cer_final {s.cer_final:.2f})" if s.cer_final is not None else ""
++            lines.append(f"  ASR: {s.asr_text}{cer}")
++        if s.target_seconds is not None and s.achieved_seconds is not None:
++            target, achieved = s.target_seconds, s.achieved_seconds
++            lines.append(f"  dur: alvo {target:.2f} s · obtido {achieved:.2f} s")
++        lines.append(f"  flags: {', '.join(s.flags) if s.flags else '—'}")
++    return "\n".join(lines)
++
++
++def render_pair(
++    name_a: str, a: list[ReviewSegment], name_b: str, b: list[ReviewSegment]
++) -> str:
++    pairs, unmatched = pair_segments(a, b)
++    lines = [f"# A = {name_a} · B = {name_b}"]
++    changed = 0
++    for sa, sbs in pairs:
++        b_text = " ".join(sb.dub_text for sb in sbs)
++        if len(sbs) == 1 and sbs[0].rev == sa.rev:
++            lines.append(f"{_span(sa)} (igual) {sa.dub_text}")
++            continue
++        changed += 1
++        b_ids = ", ".join(sb.id for sb in sbs) or "sem par"
++        b_flags = sorted({f for sb in sbs for f in sb.flags})
++        lines += [
++            f"{_span(sa)} ↔ B[{b_ids}]",
++            f"  EN: {sa.source_text}",
++            f"  A : {sa.dub_text}" + (f"  [{', '.join(sa.flags)}]" if sa.flags else ""),
++            f"  B : {b_text}" + (f"  [{', '.join(b_flags)}]" if b_flags else ""),
++        ]
++    for sb in unmatched:
++        lines.append(f"B sem par: {_span(sb)} {sb.dub_text}")
++    lines.insert(1, f"{changed} de {len(pairs)} segmentos de A mudaram")
++    return "\n".join(lines)
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
++    parser.add_argument("runs", type=Path, nargs="+", help="uma execução, ou duas para A/B")
++    args = parser.parse_args()
++    if len(args.runs) > 2:
++        parser.error("passe uma execução ou duas (A e B)")
++    if len(args.runs) == 1:
++        print(render_single(*load_run(args.runs[0])))
++    else:
++        print(render_pair(*load_run(args.runs[0]), *load_run(args.runs[1])))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/listen.py b/scripts/listen.py
+new file mode 100644
+index 0000000..928574c
+--- /dev/null
++++ b/scripts/listen.py
+@@ -0,0 +1,389 @@
++"""Servidor local de escuta e rotulagem humana (ferramenta de dev).
++
++    python -m scripts.listen <ciclo> <rotulo>                 fila do juiz + o que mudou
++    python -m scripts.listen <ciclo> <rotulo> --todos         todos os segmentos (T0.28)
++    python -m scripts.listen <ciclo> <candidato> --ab <base>  A/B cego: original, 1 e 2
++
++Abre em http://127.0.0.1:8765, só nesta máquina. Cada rótulo vai direto para
++`evals/human_labels/<par>/<video>.jsonl`, com chave segmento + rev, no mesmo
++formato do juiz: vale em todo ciclo enquanto o segmento não mudar e
++substitui o rótulo do juiz no `eval_cycle`. O veredito do Short (publicaria
++ou não) é a métrica do portão da Fase 0. No A/B o servidor guarda qual
++versão é qual; a página só vê "1" e "2", e a preferência vai para
++`evals/human_labels/<par>/preferencias.jsonl`.
++"""
++
++from __future__ import annotations
++
++import argparse
++import io
++import json
++import random
++from dataclasses import dataclass, field
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++from pathlib import Path
++from typing import Any
++from urllib.parse import parse_qs, urlparse
++
++import soundfile as sf
++
++from scripts.eval_common import (
++    CYCLES,
++    HUMAN_LABELS,
++    TAXONOMY,
++    add_human,
++    append_jsonl,
++    cycle_dir,
++    load_cycle,
++    load_human,
++    now,
++    pair_name,
++    read_json,
++    read_pending,
++    run_dir,
++    shorts,
++)
++from scripts.judge_packet import ReviewSegment, load_run, run_revision
++
++PAD_SECONDS = 0.3
++SEGMENT_LABELS = ("ok", "corrigiria")
++SHORT_LABELS = ("publicaria", "nao_publicaria")
++
++
++@dataclass
++class Version:
++    key: str
++    label: str
++    segment: ReviewSegment
++
++
++@dataclass
++class Card:
++    id: str
++    video: str
++    split: str
++    start: float
++    end: float
++    source_text: str
++    motivo: str = ""
++    o_que_ouvir: str = ""
++    versions: list[Version] = field(default_factory=list)
++
++
++@dataclass
++class State:
++    cycle_id: str
++    cdir: Path
++    par: str
++    label: str
++    ab_base: str | None
++    cards: dict[str, Card]
++    videos: list[str]
++    classes: list[str]
++    human_root: Path
++
++
++def _overlap(a: ReviewSegment, b: ReviewSegment) -> float:
++    return min(a.end, b.end) - max(a.start, b.start)
++
++
++def build_state(cycle_id: str, label: str, ab_base: str | None = None, todos: bool = False,
++                root: Path = CYCLES, human_root: Path = HUMAN_LABELS,
++                taxonomy_path: Path = TAXONOMY, seed: int | None = None) -> State:
++    _, manifest = load_cycle(cycle_id, root)
++    cdir = cycle_dir(cycle_id, root)
++    rng = random.Random(seed)
++    cards: dict[str, Card] = {}
++    videos = []
++    for short in shorts(manifest):
++        video = short["video"]
++        rdir = run_dir(cdir, label, video)
++        if not (rdir / "report.json").exists():
++            continue
++        segs = load_run(rdir)[1]
++        queue_path = cdir / label / "escuta" / f"{video}.json"
++        queue = {q["segment_id"]: q for q in (read_json(queue_path) if queue_path.exists()
++                                              else [])}
++        wanted = {s.id for s in segs} if todos else set(queue) | set(
++            read_pending(cdir, label, video))
++        base_segs = load_run(run_dir(cdir, ab_base, video))[1] if ab_base else []
++        selected = [s for s in segs if s.id in wanted]
++        if selected:
++            videos.append(video)
++        for seg in selected:
++            versions = [Version("dub", label, seg)]
++            if ab_base:
++                match = max(base_segs, key=lambda b, s=seg: _overlap(s, b), default=None)
++                if match is not None and _overlap(seg, match) > 0:
++                    pair = [(label, seg), (ab_base, match)]
++                    rng.shuffle(pair)
++                    versions = [Version(str(i + 1), lbl, sg) for i, (lbl, sg) in enumerate(pair)]
++            card_id = f"c{len(cards)}"
++            item = queue.get(seg.id, {})
++            cards[card_id] = Card(
++                id=card_id, video=video, split=short.get("split", ""),
++                start=min(v.segment.start for v in versions),
++                end=max(v.segment.end for v in versions), source_text=seg.source_text,
++                motivo=item.get("motivo", ""), o_que_ouvir=item.get("o_que_ouvir", ""),
++                versions=versions)
++    classes = sorted(read_json(taxonomy_path)["classes"])
++    return State(cycle_id, cdir, pair_name(manifest), label, ab_base, cards, videos, classes,
++                 human_root)
++
++
++# ---------------------------------------------------------------- ações
++
++
++def clip_bytes(state: State, card_id: str, which: str) -> bytes:
++    card = state.cards[card_id]
++    if which == "src":
++        path = run_dir(state.cdir, card.versions[0].label, card.video) / "audio.wav"
++    else:
++        version = next(v for v in card.versions if v.key == which)
++        path = run_dir(state.cdir, version.label, card.video) / "final_audio.wav"
++    info = sf.info(str(path))
++    start = max(0, int((card.start - PAD_SECONDS) * info.samplerate))
++    stop = min(info.frames, int((card.end + PAD_SECONDS) * info.samplerate))
++    data, sr = sf.read(str(path), start=start, stop=stop, dtype="float32", always_2d=True)
++    buffer = io.BytesIO()
++    sf.write(buffer, data, sr, format="WAV", subtype="PCM_16")
++    return buffer.getvalue()
++
++
++def save_label(state: State, payload: dict[str, Any]) -> dict[str, Any]:
++    card = state.cards[payload["card"]]
++    version = next(v for v in card.versions if v.key == payload["v"])
++    rotulo, classe = payload.get("rotulo"), payload.get("classe") or None
++    if rotulo not in SEGMENT_LABELS:
++        raise ValueError(f"rótulo inválido: {rotulo}")
++    if rotulo == "corrigiria" and classe not in state.classes:
++        raise ValueError("escolha a classe do problema")
++    row = add_human(state.par, {
++        "video": card.video, "segment_id": version.segment.id, "rev": version.segment.rev,
++        "rotulo": rotulo, "classe": classe if rotulo == "corrigiria" else None,
++        "nota": str(payload.get("nota", ""))[:500], "ciclo": state.cycle_id,
++    }, state.human_root)
++    return {"ok": True, "em": row["em"]}
++
++
++def save_pref(state: State, payload: dict[str, Any]) -> dict[str, Any]:
++    card = state.cards[payload["card"]]
++    if len(card.versions) != 2 or payload.get("melhor") not in ("1", "2", "igual"):
++        raise ValueError("preferência só existe no A/B, com 1, 2 ou igual")
++    by_label = {v.label: v for v in card.versions}
++    cand, base = by_label[state.label], by_label[state.ab_base or ""]
++    winner = payload["melhor"]
++    preferred = "igual" if winner == "igual" else (
++        "candidato" if next(v for v in card.versions if v.key == winner) is cand else "base")
++    append_jsonl(state.human_root / state.par / "preferencias.jsonl", {
++        "ciclo": state.cycle_id, "video": card.video, "preferido": preferred,
++        "segmento_candidato": cand.segment.id, "rev_candidato": cand.segment.rev,
++        "segmento_base": base.segment.id, "rev_base": base.segment.rev, "em": now(),
++    })
++    return {"ok": True}
++
++
++def save_short(state: State, payload: dict[str, Any]) -> dict[str, Any]:
++    video, verdict = payload.get("video"), payload.get("short")
++    if video not in state.videos or verdict not in SHORT_LABELS:
++        raise ValueError("vídeo ou veredito inválido")
++    run_rev = run_revision(load_run(run_dir(state.cdir, state.label, video))[1])
++    add_human(state.par, {"video": video, "short": verdict, "run_rev": run_rev,
++                          "ciclo": state.cycle_id}, state.human_root)
++    return {"ok": True}
++
++
++def page_data(state: State) -> dict[str, Any]:
++    """O que a página pode saber. No A/B, nada indica qual versão é qual."""
++    cards, verdicts = [], {}
++    human_cache = {v: load_human(state.par, v, state.human_root) for v in state.videos}
++    for card in state.cards.values():
++        segs, _ = human_cache[card.video]
++        versions = []
++        for v in card.versions:
++            existing = segs.get((v.segment.id, v.segment.rev))
++            versions.append({"key": v.key, "texto": v.segment.dub_text,
++                             "existente": {k: existing.get(k) for k in ("rotulo", "classe", "nota")}
++                             if existing else None})
++        cards.append({"id": card.id, "video": card.video, "split": card.split,
++                      "inicio": round(card.start, 2), "fim": round(card.end, 2),
++                      "original": card.source_text, "motivo": card.motivo,
++                      "o_que_ouvir": card.o_que_ouvir, "versoes": versions})
++    for video in state.videos:
++        run_rev = run_revision(load_run(run_dir(state.cdir, state.label, video))[1])
++        verdict = human_cache[video][1].get(run_rev)
++        verdicts[video] = verdict["short"] if verdict else None
++    return {"ciclo": state.cycle_id, "ab": state.ab_base is not None, "classes": state.classes,
++            "cartoes": cards, "shorts": verdicts}
++
++
++PAGE = """<!doctype html><html lang="pt-BR"><meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1"><title>Escuta</title>
++<style>
++:root{--bg:#fff;--fg:#1f1f1d;--mu:#6b6a65;--bd:#d9d7cf;--ok:#2e7d32;--bad:#b3261e;--card:#f7f6f2}
++@media (prefers-color-scheme:dark){:root{--bg:#1d1d1b;--fg:#ecebe6;--mu:#a3a29c;--bd:#3a3936;
++--ok:#81c784;--bad:#f28b82;--card:#262624}}
++body{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;max-width:820px;
++margin:0 auto;padding:1.5rem 1rem 4rem}
++h1{font-size:20px;font-weight:500;margin:0 0 .25rem}.mu{color:var(--mu);font-size:13px}
++section{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:1rem;
++margin:1rem 0}audio{width:100%;height:36px}.row{display:flex;gap:.5rem;flex-wrap:wrap;
++align-items:center;margin:.4rem 0}button{font:inherit;padding:.3rem .8rem;border-radius:8px;
++border:1px solid var(--bd);background:var(--bg);color:var(--fg);cursor:pointer}
++button.on.ok{border-color:var(--ok);color:var(--ok)}button.on.bad{border-color:var(--bad);
++color:var(--bad)}button.on{font-weight:500}select,input{font:inherit;padding:.25rem;
++border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--fg)}
++input{flex:1;min-width:10rem}.err{color:var(--bad);font-size:13px}.ver{border-top:1px solid
++var(--bd);margin-top:.6rem;padding-top:.6rem}.tx{margin:.2rem 0}
++</style>
++<h1>Escuta — ciclo <span id="ciclo"></span></h1>
++<p class="mu" id="prog"></p><div id="shorts"></div><div id="cards"></div>
++<script>
++const D = __DATA__;
++const el = (t, p = {}, ...kids) => { const e = document.createElement(t);
++  for (const [k, v] of Object.entries(p)) { if (k === "cls") e.className = v;
++    else if (k.startsWith("on")) e[k] = v; else e.setAttribute(k, v); }
++  e.append(...kids); return e; };
++async function post(path, body) {
++  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
++    body: JSON.stringify(body)});
++  if (!r.ok) throw new Error(await r.text()); return r.json(); }
++let done = new Set();
++function progress() { const total = D.cartoes.reduce((n, c) => n + c.versoes.length, 0);
++  document.getElementById("prog").textContent =
++    `${done.size} de ${total} versões rotuladas` + (D.ab ? " · A/B cego" : ""); }
++function shortBox(video, current) {
++  const msg = el("span", {cls: "mu"});
++  const btns = [["publicaria", "Publicaria", "ok"], ["nao_publicaria", "Não publicaria", "bad"]]
++    .map(([v, t, c]) => el("button", {cls: c + (current === v ? " on" : ""), onclick: async () => {
++      try { await post("/short", {video, short: v});
++        btns.forEach(b => b.classList.remove("on")); b0[v].classList.add("on");
++        msg.textContent = "salvo"; } catch (e) { msg.textContent = e.message; } }}, t));
++  const b0 = {publicaria: btns[0], nao_publicaria: btns[1]};
++  return el("div", {cls: "row"}, el("b", {}, video), ...btns, msg); }
++function versionBox(card, v) {
++  const sel = el("select", {}, el("option", {value: ""}, "classe…"),
++    ...D.classes.map(c => el("option", {value: c}, c)));
++  const nota = el("input", {placeholder: "nota (opcional)"});
++  const err = el("span", {cls: "err"}); const ok = el("button", {cls: "ok"}, "OK");
++  const bad = el("button", {cls: "bad"}, "Corrigiria");
++  if (v.existente) { sel.value = v.existente.classe || ""; nota.value = v.existente.nota || "";
++    (v.existente.rotulo === "ok" ? ok : bad).classList.add("on"); done.add(card.id + v.key); }
++  async function save(rotulo) {
++    err.textContent = "";
++    if (rotulo === "corrigiria" && !sel.value) { err.textContent = "escolha a classe"; return; }
++    try { await post("/label", {card: card.id, v: v.key, rotulo, classe: sel.value,
++        nota: nota.value});
++      ok.classList.toggle("on", rotulo === "ok"); bad.classList.toggle("on", rotulo !== "ok");
++      done.add(card.id + v.key); progress(); } catch (e) { err.textContent = e.message; } }
++  ok.onclick = () => save("ok"); bad.onclick = () => save("corrigiria");
++  sel.onchange = () => { err.textContent = ""; };
++  const title = v.key === "dub" ? "Dublado" : "Versão " + v.key;
++  return el("div", {cls: "ver"}, el("div", {cls: "mu"}, title),
++    el("audio", {controls: "", preload: "none", src: `/clip?card=${card.id}&v=${v.key}`}),
++    el("p", {cls: "tx"}, v.texto), el("div", {cls: "row"}, ok, bad, sel, nota), err); }
++function cardBox(c) {
++  const head = el("div", {cls: "mu"},
++    `${c.video} · ${c.split} · ${c.inicio.toFixed(1)}–${c.fim.toFixed(1)} s` +
++    (c.motivo ? ` · ${c.motivo}` : ""));
++  const kids = [head];
++  if (c.o_que_ouvir) kids.push(el("p", {}, el("b", {}, c.o_que_ouvir)));
++  kids.push(el("div", {cls: "mu"}, "Original"),
++    el("audio", {controls: "", preload: "none", src: `/clip?card=${c.id}&v=src`}),
++    el("p", {cls: "tx mu"}, c.original), ...c.versoes.map(v => versionBox(c, v)));
++  if (c.versoes.length === 2) { const msg = el("span", {cls: "mu"});
++    const prefs = [["1", "1 é melhor"], ["2", "2 é melhor"], ["igual", "Iguais"]]
++      .map(([k, t]) => { const b = el("button", {}, t);
++        b.onclick = async () => {
++          try { await post("/pref", {card: c.id, melhor: k});
++            prefs.forEach(x => x.classList.remove("on")); b.classList.add("on");
++            msg.textContent = "salvo"; } catch (e) { msg.textContent = e.message; } };
++        return b; });
++    kids.push(el("div", {cls: "row ver"}, ...prefs, msg)); }
++  return el("section", {}, ...kids); }
++document.getElementById("ciclo").textContent = D.ciclo;
++document.getElementById("shorts").append(el("section", {},
++  el("div", {cls: "mu"}, "Veredito por Short (métrica do portão)"),
++  ...Object.entries(D.shorts).map(([v, cur]) => shortBox(v, cur))));
++document.getElementById("cards").append(...D.cartoes.map(cardBox)); progress();
++</script></html>
++"""
++
++
++def render_page(state: State) -> str:
++    data = json.dumps(page_data(state), ensure_ascii=False).replace("</", "<\\/")
++    return PAGE.replace("__DATA__", data)
++
++
++ACTIONS = {"/label": save_label, "/pref": save_pref, "/short": save_short}
++
++
++def make_handler(state: State) -> type[BaseHTTPRequestHandler]:
++    class Handler(BaseHTTPRequestHandler):
++        def log_message(self, *args: Any) -> None:
++            return
++
++        def _send(self, code: int, body: bytes, ctype: str) -> None:
++            self.send_response(code)
++            self.send_header("Content-Type", ctype)
++            self.send_header("Content-Length", str(len(body)))
++            self.send_header("Cache-Control", "no-store")
++            self.end_headers()
++            self.wfile.write(body)
++
++        def do_GET(self) -> None:  # noqa: N802 (nome exigido pelo http.server)
++            url = urlparse(self.path)
++            try:
++                if url.path == "/":
++                    self._send(200, render_page(state).encode("utf-8"), "text/html; charset=utf-8")
++                elif url.path == "/clip":
++                    q = parse_qs(url.query)
++                    self._send(200, clip_bytes(state, q["card"][0], q["v"][0]), "audio/wav")
++                else:
++                    self._send(404, b"nao encontrado", "text/plain")
++            except (KeyError, StopIteration, OSError) as exc:
++                self._send(400, str(exc).encode("utf-8"), "text/plain; charset=utf-8")
++
++        def do_POST(self) -> None:  # noqa: N802
++            action = ACTIONS.get(urlparse(self.path).path)
++            if action is None:
++                self._send(404, b"nao encontrado", "text/plain")
++                return
++            try:
++                length = int(self.headers.get("Content-Length", "0"))
++                payload = json.loads(self.rfile.read(length) or b"{}")
++                result = action(state, payload)
++                self._send(200, json.dumps(result).encode("utf-8"), "application/json")
++            except (KeyError, ValueError, StopIteration) as exc:
++                self._send(400, str(exc).encode("utf-8"), "text/plain; charset=utf-8")
++
++    return Handler
++
++
++def serve(state: State, port: int = 8765) -> ThreadingHTTPServer:
++    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="Escuta e rotulagem humana do ciclo")
++    parser.add_argument("cycle")
++    parser.add_argument("label", help="execução a ouvir (no A/B, o candidato)")
++    parser.add_argument("--ab", metavar="BASE", help="A/B cego contra este rótulo")
++    parser.add_argument("--todos", action="store_true", help="todos os segmentos")
++    parser.add_argument("--port", type=int, default=8765)
++    args = parser.parse_args()
++    state = build_state(args.cycle, args.label, args.ab, args.todos)
++    if not state.cards:
++        raise SystemExit("nada para ouvir: sem fila do juiz, sem segmentos que mudaram "
++                         "(use --todos para rotular tudo)")
++    server = serve(state, args.port)
++    print(f"{len(state.cards)} trechos em {len(state.videos)} Shorts — "
++          f"http://127.0.0.1:{args.port}  (Ctrl+C para sair)")
++    try:
++        server.serve_forever()
++    except KeyboardInterrupt:
++        server.server_close()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/cycle_fixtures.py b/tests/cycle_fixtures.py
+new file mode 100644
+index 0000000..42977f7
+--- /dev/null
++++ b/tests/cycle_fixtures.py
+@@ -0,0 +1,64 @@
++"""Construtores de ciclos sintéticos para os testes das ferramentas do ciclo."""
++
++import hashlib
++import json
++from pathlib import Path
++
++import numpy as np
++import soundfile as sf
++
++from scripts.eval_common import labels_path, write_labels
++from scripts.eval_cycle import new_cycle
++from scripts.judge_packet import load_run
++
++SR = 8000
++
++
++def make_cycle(tmp_path: Path, shorts: list[tuple[str, str, str]],
++               **extra: object) -> tuple[Path, str]:
++    manifest = {"par": "en-xx", "idioma_alvo": "xx",
++                "shorts": [{"video": v, "split": sp, "categoria": c} for v, sp, c in shorts],
++                "elegibilidade": {"min_shorts": 2, "min_categorias": 2}, **extra}
++    path = tmp_path / "manifest.json"
++    path.write_text(json.dumps(manifest), encoding="utf-8")
++    root = tmp_path / "cycles"
++    return root, new_cycle(path, "t", root)
++
++
++def _tone(text: str, seconds: float) -> np.ndarray:
++    hz = 100 + int(hashlib.sha1(text.encode()).hexdigest()[:4], 16) % 200
++    t = np.arange(int(seconds * SR)) / SR
++    return (0.2 * np.sin(2 * np.pi * hz * t)).astype(np.float32)
++
++
++def make_run(rdir: Path, texts: list[str], timings: dict[str, float] | None = None) -> None:
++    """Execução sintética: 1 s por segmento, áudio derivado do texto (texto novo = rev novo)."""
++    (rdir / "final_segments").mkdir(parents=True, exist_ok=True)
++    segs = [{"id": f"seg{i:04d}", "t_inicio": float(i), "t_fim": i + 1.0,
++             "texto_original": f"source {i}", "traducao": t, "cer_final": 0.05}
++            for i, t in enumerate(texts)]
++    (rdir / "report.json").write_text(json.dumps({"segments": segs}), encoding="utf-8")
++    full = np.concatenate([_tone(t, 1.0) for t in texts])
++    sf.write(rdir / "final_audio.wav", full, SR)
++    sf.write(rdir / "audio.wav", _tone("source", len(texts) * 1.0), SR)
++    for seg, text in zip(segs, texts, strict=True):
++        sf.write(rdir / "final_segments" / f"{seg['id']}.wav", _tone(text, 1.0), SR)
++    if timings is not None:
++        (rdir / "stage_timings.json").write_text(json.dumps(timings), encoding="utf-8")
++
++
++def judge_labels(cdir: Path, label: str, split: str, video: str, problems: dict[str, str],
++                 rejudged: set[str] | None = None, short: str = "publicaria",
++                 run_label: str | None = None) -> None:
++    """Rótulos como o juiz escreveria; segmentos fora de `rejudged` contam como herdados."""
++    segs = load_run(cdir / (run_label or label) / "dub" / video)[1]
++    rows = []
++    for s in segs:
++        row = {"video": video, "segment_id": s.id, "rev": s.rev,
++               "rotulo": "corrigiria" if s.id in problems else "ok",
++               "classe": problems.get(s.id), "rotulador": "dub-judge"}
++        if rejudged is not None and s.id not in rejudged:
++            row["herdado_de"] = "base"
++        rows.append(row)
++    write_labels(labels_path(cdir, label, split, video),
++                 [*rows, {"video": video, "short": short, "rotulador": "dub-judge"}])
+diff --git a/tests/test_check_generalization.py b/tests/test_check_generalization.py
+new file mode 100644
+index 0000000..81d623e
+--- /dev/null
++++ b/tests/test_check_generalization.py
+@@ -0,0 +1,58 @@
++from scripts.check_generalization import find_leaks, ngrams, parse_diff, threshold_changes, words
++
++DIFF = """\
+++++ b/packages/pipeline/translation.py
++-MAX_ALTERNATIVES = 8
+++MAX_ALTERNATIVES = 12
++-_BUDGET_WEIGHT = 0.6
+++_BUDGET_WEIGHT = 0.9
+++FIXES = {"does your mom cook for you": "sua mãe cozinha pra você"}
+++    if video == "clip-ficticio":
+++    return f"seg{i:04d}"
+++++ b/tests/test_translation.py
+++    assert fix("does your mom cook for you") == "x"
+++++ b/packages/pipeline/quality.py
+++    special = "seg0006"
++"""
++
++CORPUS = ngrams(words("Listen. Does your mom cook for you? Every single night?"))
++
++
++def test_text_name_and_segment_id_leaks() -> None:
++    added, _ = parse_diff(DIFF)
++    found = find_leaks(added, CORPUS, {"clip-ficticio"})
++    by_path = {(f.path, f.severity) for f in found}
++    assert ("packages/pipeline/translation.py", "bloqueia") in by_path
++    assert ("tests/test_translation.py", "aviso") in by_path  # teste: só aviso
++    assert any("seg0006" in f.detail for f in found)
++    assert not any("seg{i:04d}" in f.detail for f in found)  # formato, não id
++    assert any("clip-ficticio" in f.detail for f in found)
++
++
++def test_threshold_change_is_a_warning() -> None:
++    added, removed = parse_diff(DIFF)
++    found = threshold_changes(added, removed)
++    assert {f.severity for f in found} == {"aviso"}
++    assert any("8 → 12" in f.detail for f in found)
++    assert any("_BUDGET_WEIGHT: 0.6 → 0.9" in f.detail for f in found)  # constante privada
++
++
++def test_short_common_phrases_do_not_trigger() -> None:
++    added, _ = parse_diff("+++ b/packages/x.py\n+# you have to pay\n")
++    assert find_leaks(added, CORPUS, set()) == []
++
++
++def test_training_dataset_with_eval_text_is_blocked(tmp_path) -> None:
++    from scripts.check_generalization import scan_dataset
++
++    data = tmp_path / "train.jsonl"
++    data.write_text('{"text": "Uma frase qualquer de treino."}\n'
++                    '{"text": "Listen. Does your mom cook for you? ok"}\n', encoding="utf-8")
++    [finding] = scan_dataset([data], CORPUS)
++    assert finding.severity == "bloqueia" and finding.path.endswith("train.jsonl:2")
++
++
++def test_evaluation_data_itself_is_not_scanned() -> None:
++    added, _ = parse_diff("+++ b/evals/human_labels/en-xx/clip-ficticio.jsonl\n"
++                          '+{"video": "clip-ficticio", "segment_id": "seg0006"}\n')
++    assert find_leaks(added, CORPUS, {"clip-ficticio"}) == []
+diff --git a/tests/test_eval_blind.py b/tests/test_eval_blind.py
+new file mode 100644
+index 0000000..d14ff95
+--- /dev/null
++++ b/tests/test_eval_blind.py
+@@ -0,0 +1,52 @@
++import json
++from pathlib import Path
++
++from scripts.eval_blind import prepare, unblind
++from scripts.eval_common import labels_path, read_labels, write_labels
++from scripts.eval_cycle import carry
++from scripts.judge_packet import load_run
++from tests.cycle_fixtures import judge_labels, make_cycle, make_run
++
++
++def test_blind_round_trip(tmp_path: Path) -> None:
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x"), ("z", "dev", "y")])
++    cdir = root / cid
++    make_run(cdir / "base" / "dub" / "a", ["um", "ruim", "tres"])
++    make_run(cdir / "cand" / "dub" / "a", ["um", "bom", "tres"])
++    make_run(cdir / "base" / "dub" / "z", ["igual"])
++    make_run(cdir / "cand" / "dub" / "z", ["igual"])
++    judge_labels(cdir, "base", "dev", "a", {"seg0001": "sentido.literal"})
++    judge_labels(cdir, "base", "dev", "z", {})
++    carry(cid, "base", "cand", root)
++
++    counts = prepare(cid, "base", "cand", root, seed=3)
++    assert counts == {"shorts": 1, "segmentos": 1}  # z não mudou, não entra no cego
++    mapping = json.loads((cdir / "blind" / "mapping.json").read_text())
++    assert set(mapping["a"].values()) >= {"base", "cand"} and "z" not in mapping
++    for letter in "AB":
++        side = cdir / "blind" / "a" / letter
++        assert (side / "pending_A.txt").exists() is False
++        assert [p.name for p in (side / "final_segments").iterdir()] == ["seg0001.wav"]
++        assert (cdir / "blind" / "a" / f"pending_{letter}.txt").read_text().split() == ["seg0001"]
++
++    # o juiz rotula às cegas: a versão "boa" (cand) sem problema
++    cand_letter = "A" if mapping["a"]["A"] == "cand" else "B"
++    base_letter = "B" if cand_letter == "A" else "A"
++    write_labels(cdir / "blind" / "a" / f"labels_{cand_letter}.jsonl",
++                 [{"segment_id": "seg0001", "rev": "xx", "rotulo": "ok", "classe": None}])
++    write_labels(cdir / "blind" / "a" / f"labels_{base_letter}.jsonl",
++                 [{"segment_id": "seg0001", "rev": "xx", "rotulo": "corrigiria",
++                   "classe": "sentido.literal"}])
++    (cdir / "blind" / "a" / "preferencias.jsonl").write_text(
++        json.dumps({"A": ["seg0001"], "B": ["seg0001"], "melhor": cand_letter}) + "\n")
++
++    result = unblind(cid, "base", "cand", root)
++    assert result["preferencias"] == {"base": 0, "candidato": 1, "igual": 0}
++    cand_rows, _ = read_labels(labels_path(cdir, "cand", "dev", "a"))
++    by_id = {r["segment_id"]: r for r in cand_rows}
++    real_rev = load_run(cdir / "cand" / "dub" / "a")[1][1].rev
++    assert by_id["seg0001"]["rev"] == real_rev and by_id["seg0001"]["cego"] is True
++    assert by_id["seg0000"].get("herdado_de") == "base"
++    paired, _ = read_labels(labels_path(cdir, "base-par", "dev", "a"))
++    assert {r["segment_id"]: r["rotulo"] for r in paired}["seg0001"] == "corrigiria"
++    assert read_labels(labels_path(cdir, "base-par", "dev", "z"))[0]  # cópia da base
+diff --git a/tests/test_eval_calibration.py b/tests/test_eval_calibration.py
+new file mode 100644
+index 0000000..5ef2e43
+--- /dev/null
++++ b/tests/test_eval_calibration.py
+@@ -0,0 +1,62 @@
++from pathlib import Path
++
++from scripts.eval_calibration import (
++    agreement,
++    calibrate,
++    class_table,
++    load_calibration,
++    noise_rate,
++    trusted_classes,
++)
++from scripts.eval_common import add_human, judge_model, labels_path, write_labels
++from scripts.judge_packet import load_run
++from tests.cycle_fixtures import judge_labels, make_cycle, make_run
++
++RULE = {"min_n": 5, "min_precisao": 0.7, "min_recall": 0.6}
++
++
++def _row(rotulo: str, classe: str | None = None) -> dict:
++    return {"rotulo": rotulo, "classe": classe}
++
++
++def test_agreement_per_class_and_trust() -> None:
++    pairs = [(_row("corrigiria", "a"), _row("corrigiria", "a"))] * 5
++    pairs += [(_row("corrigiria", "a"), _row("ok"))]               # alarme falso
++    pairs += [(_row("ok"), _row("corrigiria", "a"))]               # o juiz não viu
++    pairs += [(_row("escutar", "b"), _row("corrigiria", "b"))] * 2  # pouca amostra
++    pairs += [(_row("ok"), _row("ok"))] * 10
++    agr = agreement(pairs)
++    table = class_table(agr, RULE)
++    assert table["a"]["precisao"] == round(5 / 6, 2) and table["a"]["recall"] == round(5 / 6, 2)
++    assert table["a"]["confiavel"] and not table["b"]["confiavel"]
++    assert agr["vp"] == 7 and agr["fp"] == 1 and agr["fn"] == 1 and agr["vn"] == 10
++
++
++def test_judge_noise_counts_class_flips() -> None:
++    pairs = [(_row("corrigiria", "a"), _row("corrigiria", "b")), (_row("ok"), _row("ok"))]
++    assert agreement(pairs)["discordancia"] == 0.5
++
++
++def test_calibrate_writes_file_valid_only_for_same_judge_model(tmp_path: Path) -> None:
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x")])
++    cdir = root / cid
++    make_run(cdir / "base" / "dub" / "a", [f"t{i}" for i in range(6)])
++    problems = {f"seg{i:04d}": "sentido.literal" for i in range(5)}
++    judge_labels(cdir, "base", "dev", "a", problems)
++    rows = [{"segment_id": s.id, "rev": s.rev, "rotulo": "corrigiria" if s.id in problems
++             else "ok", "classe": problems.get(s.id)}
++            for s in load_run(cdir / "base" / "dub" / "a")[1]]
++    rows[0] = {**rows[0], "classe": "sentido.omissao"}  # segunda leitura troca uma classe
++    write_labels(labels_path(cdir, "base-r2", "dev", "a"), rows)
++    for s in load_run(cdir / "base" / "dub" / "a")[1]:
++        add_human("en-xx", {"video": "a", "segment_id": s.id, "rev": s.rev,
++                            "rotulo": "corrigiria" if s.id in problems else "ok",
++                            "classe": problems.get(s.id)}, tmp_path / "human")
++    result = calibrate(cid, "base", "base-r2", root, tmp_path / "human", tmp_path / "calib")
++    assert result["classes"]["sentido.literal"]["confiavel"]
++    assert result["ruido"]["discordancia"] == round(1 / 6, 3)
++    calib = load_calibration("en-xx", judge_model(), tmp_path / "calib")
++    assert trusted_classes(calib) == {"sentido.literal"}
++    assert noise_rate(calib) == (round(1 / 6, 3), True)
++    other = load_calibration("en-xx", "outro-modelo", tmp_path / "calib")
++    assert trusted_classes(other) == set() and noise_rate(other)[1] is False
+diff --git a/tests/test_eval_cycle.py b/tests/test_eval_cycle.py
+new file mode 100644
+index 0000000..751b1a5
+--- /dev/null
++++ b/tests/test_eval_cycle.py
+@@ -0,0 +1,111 @@
++import json
++from pathlib import Path
++
++from scripts.eval_cycle import (
++    carry,
++    compare,
++    labels_path,
++    new_cycle,
++    read_labels,
++    snapshot,
++    summarize,
++    write_labels,
++)
++from scripts.judge_packet import segment_revision
++
++TAXONOMY = Path(__file__).resolve().parents[1] / "evals" / "taxonomy.json"
++
++
++def _cycle(tmp_path: Path, shorts: list[tuple[str, str, str]]) -> tuple[Path, str]:
++    manifest = {
++        "shorts": [{"video": v, "split": sp, "categoria": c} for v, sp, c in shorts],
++        "elegibilidade": {"min_shorts": 2, "min_categorias": 2},
++    }
++    path = tmp_path / "manifest.json"
++    path.write_text(json.dumps(manifest), encoding="utf-8")
++    root = tmp_path / "cycles"
++    return root, new_cycle(path, "t", root)
++
++
++def _run(directory: Path, texts: list[str]) -> None:
++    directory.mkdir(parents=True, exist_ok=True)
++    segs = [{"id": f"seg{i:04d}", "t_inicio": float(i), "t_fim": i + 1.0,
++             "texto_original": "x", "traducao": t} for i, t in enumerate(texts)]
++    (directory / "report.json").write_text(json.dumps({"segments": segs}), encoding="utf-8")
++
++
++def _label(root: Path, cid: str, label: str, split: str, video: str,
++           problems: dict[str, str], n_segments: int = 3, short: str = "publicaria") -> None:
++    rows = [{"segment_id": f"seg{i:04d}", "rotulo": "corrigiria" if f"seg{i:04d}" in problems
++             else "ok", "classe": problems.get(f"seg{i:04d}")} for i in range(n_segments)]
++    write_labels(labels_path(root / cid, label, split, video), [*rows, {"short": short}])
++
++
++def test_snapshot_copies_runs_and_reports_missing(tmp_path: Path) -> None:
++    root, cid = _cycle(tmp_path, [("a", "dev", "x"), ("b", "dev", "x")])
++    dub = tmp_path / "dub"
++    _run(dub / "a", ["Oi."])
++    (dub / "a" / "final_segments").mkdir()
++    (dub / "a" / "final_segments" / "seg0000.wav").write_bytes(b"RIFF")
++    assert snapshot(cid, "base", root, dub) == ["b"]
++    assert (root / cid / "base" / "dub" / "a" / "final_segments" / "seg0000.wav").exists()
++
++
++def test_carry_reuses_identical_segments_and_lists_changed_ones(tmp_path: Path) -> None:
++    root, cid = _cycle(tmp_path, [("a", "dev", "x")])
++    _run(root / cid / "candidato" / "dub" / "a", ["Oi.", "Liga pro seu pai."])
++    old = [{"segment_id": "seg0000", "rev": segment_revision("Oi."), "rotulo": "ok"},
++           {"segment_id": "seg0001", "rev": segment_revision("Chame seu pai."),
++            "rotulo": "corrigiria", "classe": "sentido.literal"},
++           {"short": "nao_publicaria"}]
++    write_labels(labels_path(root / cid, "base", "dev", "a"), old)
++    assert carry(cid, "base", "candidato", root) == {"herdados": 1, "pendentes": 1}
++    carried, short = read_labels(labels_path(root / cid, "candidato", "dev", "a"))
++    assert [r["segment_id"] for r in carried] == ["seg0000"] and short is None
++    pending = (root / cid / "candidato" / "pending" / "a.txt").read_text()
++    assert pending.split() == ["seg0001"]
++
++
++def test_summary_eligibility_needs_spread_across_shorts_and_categories(tmp_path: Path) -> None:
++    root, cid = _cycle(tmp_path, [("a", "dev", "streamer"), ("b", "dev", "podcast"),
++                                  ("c", "dev", "podcast")])
++    _label(root, cid, "base", "dev", "a", {"seg0000": "sentido.pessoa_sujeito"})
++    _label(root, cid, "base", "dev", "b", {"seg0001": "sentido.pessoa_sujeito"})
++    _label(root, cid, "base", "dev", "c", {"seg0000": "voz.instavel", "seg0002": "voz.instavel"})
++    s = summarize(cid, "base", "dev", root, TAXONOMY)
++    assert s["classes"]["sentido.pessoa_sujeito"]["elegivel"]
++    assert not s["classes"]["voz.instavel"]["elegivel"]  # 1 Short só, mesmo com 2 casos
++
++
++def _ab(tmp_path: Path, dev: tuple[int, int], hold: tuple[int, int],
++        other_dev: tuple[int, int] = (0, 0)) -> str:
++    root, cid = _cycle(tmp_path, [("a", "dev", "x"), ("h", "holdout", "y")])
++    target = "sentido.pessoa_sujeito"
++    for label, i in (("base", 0), ("cand", 1)):
++        problems = {f"seg{k:04d}": target for k in range(dev[i])}
++        problems |= {f"seg{k:04d}": "registro.formal_demais"
++                     for k in range(dev[i], dev[i] + other_dev[i])}
++        _label(root, cid, label, "dev", "a", problems, n_segments=8)
++        _label(root, cid, label, "holdout", "h",
++               {f"seg{k:04d}": target for k in range(hold[i])}, n_segments=8)
++    return compare(cid, "base", "cand", [target], root, TAXONOMY)["veredito"]
++
++
++def test_compare_accepts_real_improvement(tmp_path: Path) -> None:
++    assert _ab(tmp_path, dev=(4, 1), hold=(2, 1)).startswith("ACEITAR, sujeito")
++
++
++def test_compare_rejects_when_holdout_gets_worse(tmp_path: Path) -> None:
++    assert "overfitting" in _ab(tmp_path, dev=(4, 0), hold=(1, 2))
++
++
++def test_compare_rejects_regression_in_other_class(tmp_path: Path) -> None:
++    assert "regressões" in _ab(tmp_path, dev=(4, 1), hold=(1, 1), other_dev=(0, 3))
++
++
++def test_compare_inconclusive_without_dev_gain(tmp_path: Path) -> None:
++    assert _ab(tmp_path, dev=(3, 3), hold=(1, 1)).startswith("INCONCLUSIVO")
++
++
++def test_compare_flags_unverified_generalization(tmp_path: Path) -> None:
++    assert _ab(tmp_path, dev=(3, 1), hold=(0, 0)).startswith("ACEITAR COM RESSALVA")
+diff --git a/tests/test_eval_gates.py b/tests/test_eval_gates.py
+new file mode 100644
+index 0000000..04bcee7
+--- /dev/null
++++ b/tests/test_eval_gates.py
+@@ -0,0 +1,133 @@
++"""Portões do `compare`: ruído, teste do sinal, custo, rótulo humano, calibração, preferência."""
++
++import json
++from pathlib import Path
++
++from scripts.eval_common import add_human, judge_model, read_jsonl, write_json
++from scripts.eval_cycle import carry, compare, holdout_uses, summarize
++from scripts.judge_packet import load_run
++from tests.cycle_fixtures import judge_labels, make_cycle, make_run
++
++TAXONOMY = Path(__file__).resolve().parents[1] / "evals" / "taxonomy.json"
++T = "sentido.pessoa_sujeito"
++OTHER = "registro.formal_demais"
++
++
++def _cmp(root: Path, cid: str, tmp_path: Path, **kw) -> dict:
++    return compare(cid, "base", "cand", [T], root, TAXONOMY, human_root=tmp_path / "human",
++                   calib_root=tmp_path / "calib", **kw)
++
++
++def _two_runs(root: Path, cid: str, video: str, base: list[str], cand: list[str],
++              cost: tuple[float, float] | None = None) -> None:
++    cdir = root / cid
++    make_run(cdir / "base" / "dub" / video, base, {"synthesize": cost[0]} if cost else None)
++    make_run(cdir / "cand" / "dub" / video, cand, {"synthesize": cost[1]} if cost else None)
++
++
++def test_improvement_inside_judge_noise_is_inconclusive(tmp_path: Path) -> None:
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x"), ("h", "holdout", "y")])
++    for v, sp in (("a", "dev"), ("h", "holdout")):
++        _two_runs(root, cid, v, ["p"] * 8, ["p"] * 8)
++        judge_labels(root / cid, "base", sp, v, {"seg0000": T, "seg0001": T} if v == "a" else {})
++        judge_labels(root / cid, "cand", sp, v, {"seg0000": T} if v == "a" else {})
++    # 8 segmentos reavaliados × ruído padrão 0,15 = 1,2 > melhora de 1
++    assert _cmp(root, cid, tmp_path)["veredito"].startswith("INCONCLUSIVO: a melhora")
++
++
++def test_improvement_concentrated_in_one_short_fails_sign_test(tmp_path: Path) -> None:
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x"), ("b", "dev", "y"), ("c", "dev", "z"),
++                                      ("h", "holdout", "y")])
++    cdir = root / cid
++    plan = {"a": ({f"seg{i:04d}": T for i in range(4)}, {}),
++            "b": ({}, {"seg0000": T}), "c": ({}, {"seg0000": T}), "h": ({"seg0000": T}, {})}
++    for v, (base_p, cand_p) in plan.items():
++        sp = "holdout" if v == "h" else "dev"
++        _two_runs(root, cid, v, ["p"] * 6, ["p"] * 6)
++        judge_labels(cdir, "base", sp, v, base_p)
++        judge_labels(cdir, "cand", sp, v, cand_p, rejudged=set(base_p) | set(cand_p))
++    r = _cmp(root, cid, tmp_path)
++    assert r["splits"]["dev"]["sinal"] == {"melhoraram": 1, "pioraram": 2, "p": 1.0}
++    assert "mais Shorts" in r["veredito"]
++
++
++def test_cost_increase_is_a_regression(tmp_path: Path) -> None:
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x"), ("h", "holdout", "y")])
++    for v, sp in (("a", "dev"), ("h", "holdout")):
++        _two_runs(root, cid, v, ["p"] * 4, ["p"] * 4, cost=(300.0, 420.0))
++        judge_labels(root / cid, "base", sp, v, {f"seg{i:04d}": T for i in range(4)})
++        judge_labels(root / cid, "cand", sp, v, {}, rejudged=set())
++    r = _cmp(root, cid, tmp_path)
++    assert any("custo por Short 300 s → 420 s" in x for x in r["regressoes"])
++    assert r["veredito"].startswith("REJEITAR")
++
++
++def test_human_label_replaces_judge_label(tmp_path: Path) -> None:
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x")])
++    make_run(root / cid / "base" / "dub" / "a", ["p", "q"])
++    judge_labels(root / cid, "base", "dev", "a", {"seg0001": T})
++    rev = load_run(root / cid / "base" / "dub" / "a")[1][1].rev
++    human = tmp_path / "human"
++    assert summarize(cid, "base", "dev", root, TAXONOMY, human)["classes"][T]["corrigiria"] == 1
++    add_human("en-xx", {"video": "a", "segment_id": "seg0001", "rev": rev, "rotulo": "ok",
++                        "classe": None}, human)
++    s = summarize(cid, "base", "dev", root, TAXONOMY, human)
++    assert T not in s["classes"] and s["fontes"]["humano"] == 1
++
++
++def test_uncalibrated_target_needs_human_labels_on_changed_segments(tmp_path: Path) -> None:
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x"), ("b", "dev", "y"), ("h", "holdout", "y")])
++    cdir = root / cid
++    for v in ("a", "b", "h"):
++        sp = "holdout" if v == "h" else "dev"
++        make_run(cdir / "base" / "dub" / v, ["ruim", "ok1", "ok2", "ok3"])
++        make_run(cdir / "cand" / "dub" / v, ["bom", "ok1", "ok2", "ok3"])
++        judge_labels(cdir, "base", sp, v, {"seg0000": T})
++    carry(cid, "base", "cand", root)
++    for v in ("a", "b", "h"):
++        judge_labels(cdir, "cand", "holdout" if v == "h" else "dev", v, {}, rejudged={"seg0000"})
++    write_json(tmp_path / "calib" / "en-xx.json", {
++        "juiz_modelo": judge_model(), "ruido": {"discordancia": 0.05, "n": 50},
++        "classes": {T: {"confiavel": False}}})
++    r = _cmp(root, cid, tmp_path)
++    assert r["veredito"].startswith("PRECISA DE RÓTULO HUMANO")
++    for v in ("a", "b", "h"):
++        seg = load_run(cdir / "cand" / "dub" / v)[1][0]
++        add_human("en-xx", {"video": v, "segment_id": seg.id, "rev": seg.rev, "rotulo": "ok",
++                            "classe": None}, tmp_path / "human")
++    assert _cmp(root, cid, tmp_path)["veredito"].startswith("ACEITAR, sujeito")
++
++
++def test_blind_judge_preferring_base_is_a_regression(tmp_path: Path) -> None:
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x"), ("h", "holdout", "y")])
++    for v, sp in (("a", "dev"), ("h", "holdout")):
++        _two_runs(root, cid, v, ["p"] * 4, ["p"] * 4)
++        judge_labels(root / cid, "base", sp, v, {f"seg{i:04d}": T for i in range(4)})
++        judge_labels(root / cid, "cand", sp, v, {}, rejudged=set())
++    write_json(root / cid / "preferencias_juiz.json", {"base": 3, "candidato": 1, "igual": 0})
++    assert any("preferiu a base" in x for x in _cmp(root, cid, tmp_path)["regressoes"])
++
++
++def test_compare_records_holdout_use(tmp_path: Path) -> None:
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x"), ("h", "holdout", "y")])
++    for v, sp in (("a", "dev"), ("h", "holdout")):
++        _two_runs(root, cid, v, ["p"], ["p"])
++        judge_labels(root / cid, "base", sp, v, {})
++        judge_labels(root / cid, "cand", sp, v, {})
++    _cmp(root, cid, tmp_path)
++    meta = json.loads((root / cid / "cycle.json").read_text())
++    assert holdout_uses(meta["manifest"], root) == 1
++    assert read_jsonl(root / cid / "nao-existe.jsonl") == []
++
++
++def test_exam_split_stays_out_of_regular_snapshots(tmp_path: Path) -> None:
++    from scripts.eval_cycle import snapshot
++
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x"), ("e", "exame", "y")])
++    dub = tmp_path / "dub"
++    make_run(dub / "a", ["p"])
++    make_run(dub / "e", ["p"])
++    assert snapshot(cid, "base", root, dub) == []
++    assert not (root / cid / "base" / "dub" / "e").exists()
++    assert snapshot(cid, "marco", root, dub, splits=("exame",)) == []
++    assert (root / cid / "marco" / "dub" / "e").exists()
+diff --git a/tests/test_guard_agent.py b/tests/test_guard_agent.py
+new file mode 100644
+index 0000000..6bf25e3
+--- /dev/null
++++ b/tests/test_guard_agent.py
+@@ -0,0 +1,101 @@
++import importlib.util
++import json
++import subprocess
++import sys
++from pathlib import Path
++
++HOOK = Path(__file__).resolve().parents[1] / ".claude" / "hooks" / "guard_agent.py"
++_spec = importlib.util.spec_from_file_location("guard_agent", HOOK)
++guard = importlib.util.module_from_spec(_spec)
++_spec.loader.exec_module(guard)
++
++
++def _root(tmp_path: Path) -> Path:
++    golden = tmp_path / "evals" / "golden"
++    golden.mkdir(parents=True)
++    shorts = [{"video": "devclip", "split": "dev"}, {"video": "segredo", "split": "holdout"}]
++    (golden / "en-xx.json").write_text(json.dumps({"shorts": shorts}), encoding="utf-8")
++    return tmp_path
++
++
++def test_nobody_touches_gpu_or_pushes(tmp_path: Path) -> None:
++    root = _root(tmp_path)
++    for role in ("judge", "analyst", "implementer"):
++        for cmd in ("python -m scripts.dub videos/a.mp4", "ssh root@pod", "git push origin x"):
++            assert guard.check(role, "Bash", {"command": cmd}, root)
++    allowed = {"command": "python -m scripts.judge_audio x"}
++    assert guard.check("judge", "Bash", allowed, root) is None
++
++
++def test_judge_and_analyst_write_only_in_cache(tmp_path: Path) -> None:
++    root = _root(tmp_path)
++    assert guard.check("judge", "Write", {"file_path": str(root / "packages/x.py")}, root)
++    ok = {"file_path": str(root / ".cache/cycles/c/base/labels/dev/devclip.jsonl")}
++    assert guard.check("judge", "Write", ok, root) is None
++
++
++def test_analyst_sees_dev_but_never_holdout(tmp_path: Path) -> None:
++    root = _root(tmp_path)
++    dev = {"file_path": ".cache/cycles/c/base/labels/dev/devclip.jsonl"}
++    assert guard.check("analyst", "Read", dev, root) is None
++    for blocked in ({"file_path": ".cache/cycles/c/base/labels/holdout/segredo.jsonl"},
++                    {"command": "cat .cache/dub/segredo/report.json"},
++                    {"pattern": "seu pai", "path": ".cache"},
++                    {"command": "grep -r pai .cache/cycles/c/base"}):
++        tool = "Bash" if "command" in blocked else "Read"
++        assert guard.check("analyst", tool, blocked, root), blocked
++    snap = {"command": "python -m scripts.judge_packet .cache/cycles/c/base/dub/devclip"}
++    assert guard.check("analyst", "Bash", snap, root) is None
++
++
++def test_implementer_never_sees_eval_set_or_protected_files(tmp_path: Path) -> None:
++    root = _root(tmp_path)
++    assert guard.check("implementer", "Read", {"file_path": ".cache/dub/devclip/report.json"},
++                       root)
++    for path in ("evals/golden/en-xx.json", ".claude/agents/dub-judge.md", "TASKS.md"):
++        assert guard.check("implementer", "Edit", {"file_path": str(root / path)}, root)
++    code = {"file_path": str(root / "packages/pipeline/translation.py")}
++    assert guard.check("implementer", "Edit", code, root) is None
++
++
++def test_hook_exits_2_with_reason(tmp_path: Path) -> None:
++    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ssh root@pod"}})
++    proc = subprocess.run([sys.executable, str(HOOK), "analyst"], input=payload, text=True,
++                          capture_output=True, env={"CLAUDE_PROJECT_DIR": str(_root(tmp_path))})
++    assert proc.returncode == 2 and "GPU/Pod" in proc.stderr
++
++
++def _root_with_exam(tmp_path: Path) -> Path:
++    root = _root(tmp_path)
++    golden = root / "evals" / "golden"
++    data = json.loads((golden / "en-xx.json").read_text())
++    data["shorts"].append({"video": "selado", "split": "exame"})
++    (golden / "en-xx.json").write_text(json.dumps(data), encoding="utf-8")
++    return root
++
++
++def test_new_roles_and_rules(tmp_path: Path) -> None:
++    root = _root_with_exam(tmp_path)
++    # ninguém sobe o servidor de escuta
++    for role in ("judge", "analyst", "implementer", "reviewer"):
++        assert guard.check(role, "Bash", {"command": "python -m scripts.listen c base"}, root)
++    # juiz não vê o mapa do A/B cego
++    assert guard.check("judge", "Read", {"file_path": ".cache/cycles/c/blind/mapping.json"}, root)
++    blind_side = {"command": "python -m scripts.judge_packet .cache/cycles/c/blind/x/A"}
++    assert guard.check("judge", "Bash", blind_side, root) is None
++    # analista: exame bloqueado; rótulos humanos só de dev; sondas liberadas
++    assert guard.check("analyst", "Bash", {"command": "cat .cache/dub/selado/report.json"}, root)
++    human_dev = {"file_path": "evals/human_labels/en-xx/devclip.jsonl"}
++    assert guard.check("analyst", "Read", human_dev, root) is None
++    for blocked in ("evals/human_labels/en-xx/segredo.jsonl", "evals/human_labels/en-xx"):
++        assert guard.check("analyst", "Read", {"file_path": blocked}, root)
++    probe = {"command": "python .cache/cycles/c/sondas/rerank.py"}
++    assert guard.check("analyst", "Bash", probe, root) is None
++    # revisor: não vê o conjunto, só escreve em tests/
++    assert guard.check("reviewer", "Read", {"file_path": "evals/human_labels/en-xx/devclip.jsonl"},
++                       root)
++    assert guard.check("reviewer", "Write", {"file_path": str(root / "packages/x.py")}, root)
++    ok_test = {"file_path": str(root / "tests/test_adversarial_t1.py")}
++    assert guard.check("reviewer", "Write", ok_test, root) is None
++    # implementador também não lê rótulos humanos
++    assert guard.check("implementer", "Bash", {"command": "cat evals/human_labels/x/a.jsonl"}, root)
+diff --git a/tests/test_judge_audio.py b/tests/test_judge_audio.py
+new file mode 100644
+index 0000000..7e90b14
+--- /dev/null
++++ b/tests/test_judge_audio.py
+@@ -0,0 +1,92 @@
++import json
++from pathlib import Path
++
++import numpy as np
++
++from scripts.judge_audio import (
++    ANALYSIS_SR,
++    HOP_SECONDS,
++    SegmentVoice,
++    f0_track,
++    final_peak_st,
++    is_polar_question,
++    load_language,
++    load_segments,
++    median_hz,
++    question_start_regex,
++    sparkline,
++    speaker_summary,
++)
++
++
++def _voice(hz: float, seconds: float = 1.0) -> np.ndarray:
++    """Tom harmônico (5 parciais), parecido o bastante com voz para o pyin."""
++    t = np.arange(int(seconds * ANALYSIS_SR)) / ANALYSIS_SR
++    return sum(np.sin(2 * np.pi * hz * k * t) / k for k in range(1, 6)).astype(np.float32) * 0.3
++
++
++def _f0(*pieces: tuple[float, float]) -> np.ndarray:
++    """Trilha de F0 sintética: (Hz ou NaN, segundos) em sequência."""
++    return np.concatenate([np.full(round(s / HOP_SECONDS), hz) for hz, s in pieces])
++
++
++def test_f0_track_finds_pitch_of_synthetic_voice() -> None:
++    assert abs(median_hz(f0_track(_voice(150.0))) - 150.0) < 5.0
++
++
++def test_polar_vs_wh_questions_from_ptbr_profile() -> None:
++    wh = question_start_regex(load_language("pt-BR"))
++    assert is_polar_question("Seu pai paga pra você?", wh)
++    assert is_polar_question("Não sei. Ela vai voltar amanhã cedo?", wh)
++    assert not is_polar_question("O que cê tá comendo agora?", wh)
++    assert not is_polar_question("Quanto cê tá devendo?", wh)
++    assert not is_polar_question("Do que tá falando?", wh)
++    assert not is_polar_question("Liga pro seu pai.", wh)
++
++
++def test_language_without_intonation_rule_disables_check() -> None:
++    assert question_start_regex({"codigo": "xx", "perguntas": {}}) is None
++
++
++def test_final_peak_separates_rising_from_flat_ending() -> None:
++    rising = _f0((120.0, 1.5), (np.nan, 0.1), (170.0, 0.4))
++    flat = _f0((120.0, 1.5), (np.nan, 0.1), (115.0, 0.4))
++    assert final_peak_st(rising) > 4.0
++    assert final_peak_st(flat) < 1.0
++    assert final_peak_st(np.full(10, np.nan)) is None
++
++
++def test_sparkline_fixed_scale_and_unvoiced() -> None:
++    assert sparkline(np.array([np.nan, -6.0, 6.0])) == "·▁█"
++    assert len(sparkline(np.zeros(200))) == 40
++
++
++def test_speaker_summary_flags_shared_voice_and_register_gap() -> None:
++    segs = [
++        SegmentVoice("seg0000", 0, 1, "a", speaker="SPEAKER_00", voice="h21",
++                     source_hz=120.0, dub_hz=125.0),
++        SegmentVoice("seg0001", 1, 2, "b", speaker="SPEAKER_01", voice="h21",
++                     source_hz=230.0, dub_hz=118.0),
++    ]
++    lines = "\n".join(speaker_summary(segs, {"h21": "m"}))
++    assert "voz h21 (m)" in lines
++    assert "⚠ registro" in lines  # 230 Hz -> 118 Hz = -11.6 st
++    assert "⚠ a voz h21 foi usada para SPEAKER_00, SPEAKER_01" in lines
++
++
++def test_load_segments_reads_voice_speaker_and_emotion(tmp_path: Path) -> None:
++    report = {"segments": [{
++        "id": "seg0000", "t_inicio": 0.0, "t_fim": 2.0, "traducao": "Oi?",
++        "pitch_std_source": 2.0, "pitch_std_dub": 0.8,
++        "emotion_match": {"source_emotion": "happy", "dub_emotion": "neutral", "similarity": 0.3},
++    }]}
++    (tmp_path / "report.json").write_text(json.dumps(report), encoding="utf-8")
++    (tmp_path / "segments.json").write_text(
++        json.dumps([{"id": "seg0000", "speaker": "SPEAKER_01"}]), encoding="utf-8"
++    )
++    (tmp_path / "synth_jobs.json").write_text(
++        json.dumps([{"id": "seg0000", "reference_audio_path": "voices/bank/h27.wav"}]),
++        encoding="utf-8",
++    )
++    seg = load_segments(tmp_path)[0]
++    assert (seg.speaker, seg.voice, seg.emotion["dub_emotion"]) == ("SPEAKER_01", "h27", "neutral")
+diff --git a/tests/test_judge_packet.py b/tests/test_judge_packet.py
+new file mode 100644
+index 0000000..ae29fdf
+--- /dev/null
++++ b/tests/test_judge_packet.py
+@@ -0,0 +1,70 @@
++import json
++from pathlib import Path
++
++from scripts.judge_packet import (
++    ReviewSegment,
++    active_flags,
++    load_run,
++    pair_segments,
++    render_pair,
++    text_revision,
++)
++
++
++def _seg(id_: str, start: float, end: float, pt: str) -> ReviewSegment:
++    return ReviewSegment(id=id_, start=start, end=end, source_text="x", dub_text=pt)
++
++
++def test_text_revision_ignores_whitespace_but_not_words() -> None:
++    assert text_revision("Liga pro  seu pai.") == text_revision(" Liga pro seu pai.")
++    assert text_revision("Liga pro seu pai.") != text_revision("Chame seu pai.")
++
++
++def test_active_flags_skips_false_and_stub_markers() -> None:
++    flags = {"cer_alto": True, "truncado": False, "traducao_infiel_not_computed": True}
++    assert active_flags(flags) == ("cer_alto",)
++
++
++def test_load_traducao_json(tmp_path: Path) -> None:
++    path = tmp_path / "short__2_so-opus_traducao.json"
++    item = {"id": "seg0000", "t_inicio": 0.2, "t_fim": 1.6,
++            "texto_original": "Call your dad.", "traducao_usada": "Chame seu pai."}
++    path.write_text(json.dumps([item]), encoding="utf-8")
++    name, segs = load_run(path)
++    assert name == "short__2_so-opus"
++    assert segs[0].dub_text == "Chame seu pai."
++    assert segs[0].asr_text is None
++
++
++def test_load_cache_dir_merges_speaker_and_flags(tmp_path: Path) -> None:
++    report = {"segments": [{
++        "id": "seg0000", "t_inicio": 0.0, "t_fim": 2.0, "texto_original": "Hi",
++        "traducao": "Oi", "hipotese_final": "oi", "cer_final": 0.0,
++        "target_seconds": 2.0, "achieved_seconds": 1.9,
++        "flags": {"fora_duracao": True, "locutor_suspeito_not_computed": True},
++    }]}
++    (tmp_path / "report.json").write_text(json.dumps(report), encoding="utf-8")
++    speakers = [{"id": "seg0000", "speaker": "SPEAKER_01"}]
++    (tmp_path / "segments.json").write_text(json.dumps(speakers), encoding="utf-8")
++    _, segs = load_run(tmp_path)
++    assert segs[0].speaker == "SPEAKER_01"
++    assert segs[0].flags == ("fora_duracao",)
++    assert segs[0].asr_text == "oi"
++
++
++def test_pair_segments_survives_resegmentation() -> None:
++    a = [_seg("seg0000", 0.0, 4.0, "Oi. Tudo bem?")]
++    b = [_seg("seg0000", 0.0, 2.0, "Oi."), _seg("seg0001", 2.0, 4.0, "Tudo bem?"),
++         _seg("seg0002", 9.0, 10.0, "Tchau.")]
++    pairs, unmatched = pair_segments(a, b)
++    assert [s.id for s in pairs[0][1]] == ["seg0000", "seg0001"]
++    assert [s.id for s in unmatched] == ["seg0002"]
++
++
++def test_render_pair_marks_identical_and_counts_changes() -> None:
++    a = [_seg("seg0000", 0.0, 1.0, "Oi."), _seg("seg0001", 1.0, 2.0, "Chame seu pai.")]
++    b = [_seg("seg0000", 0.0, 1.0, "Oi."), _seg("seg0001", 1.0, 2.0, "Liga pro seu pai.")]
++    out = render_pair("A", a, "B", b)
++    assert "1 de 2 segmentos de A mudaram" in out
++    assert "(igual) Oi." in out
++    assert "B : Liga pro seu pai." in out
+diff --git a/tests/test_listen.py b/tests/test_listen.py
+new file mode 100644
+index 0000000..594d922
+--- /dev/null
++++ b/tests/test_listen.py
+@@ -0,0 +1,132 @@
++import io
++import json
++import re
++import shutil
++import subprocess
++import threading
++import urllib.error
++import urllib.request
++from pathlib import Path
++
++import pytest
++import soundfile as sf
++
++from scripts.eval_common import load_human, read_jsonl, write_json
++from scripts.eval_cycle import carry
++from scripts.judge_packet import load_run, run_revision
++from scripts.listen import (
++    PAD_SECONDS,
++    build_state,
++    clip_bytes,
++    render_page,
++    save_label,
++    save_pref,
++    save_short,
++    serve,
++)
++from tests.cycle_fixtures import judge_labels, make_cycle, make_run
++
++TAXONOMY = Path(__file__).resolve().parents[1] / "evals" / "taxonomy.json"
++
++
++def _setup(tmp_path: Path):
++    root, cid = make_cycle(tmp_path, [("a", "dev", "x"), ("h", "holdout", "y")])
++    cdir = root / cid
++    for v in ("a", "h"):
++        make_run(cdir / "base" / "dub" / v, ["um", "ruim", "tres"])
++        make_run(cdir / "cand" / "dub" / v, ["um", "bom", "tres"])
++        judge_labels(cdir, "base", "dev" if v == "a" else "holdout", v, {})
++    carry(cid, "base", "cand", root)
++    write_json(cdir / "cand" / "escuta" / "a.json",
++               [{"segment_id": "seg0002", "motivo": "emocao.achatada", "o_que_ouvir": "sobe?"}])
++    return root, cid, cdir
++
++
++def _state(tmp_path, root, cid, **kw):
++    return build_state(cid, "cand", root=root, human_root=tmp_path / "human",
++                       taxonomy_path=TAXONOMY, seed=1, **kw)
++
++
++def test_queue_is_judge_queue_plus_changed_segments(tmp_path: Path) -> None:
++    root, cid, _ = _setup(tmp_path)
++    state = _state(tmp_path, root, cid)
++    picked = sorted((c.video, c.versions[0].segment.id) for c in state.cards.values())
++    assert picked == [("a", "seg0001"), ("a", "seg0002"), ("h", "seg0001")]
++    assert len(_state(tmp_path, root, cid, todos=True).cards) == 6
++
++
++def test_label_goes_to_human_store_with_segment_rev(tmp_path: Path) -> None:
++    root, cid, cdir = _setup(tmp_path)
++    state = _state(tmp_path, root, cid)
++    card = next(c for c in state.cards.values() if c.video == "a")
++    with pytest.raises(ValueError):
++        save_label(state, {"card": card.id, "v": "dub", "rotulo": "corrigiria"})
++    save_label(state, {"card": card.id, "v": "dub", "rotulo": "corrigiria",
++                       "classe": "sentido.literal", "nota": "literal"})
++    seg = card.versions[0].segment
++    human, _ = load_human("en-xx", "a", tmp_path / "human")
++    assert human[(seg.id, seg.rev)]["classe"] == "sentido.literal"
++
++
++def test_blind_ab_hides_versions_and_resolves_preference(tmp_path: Path) -> None:
++    root, cid, cdir = _setup(tmp_path)
++    state = _state(tmp_path, root, cid, ab_base="base")
++    card = next(c for c in state.cards.values() if len(c.versions) == 2)
++    assert {v.key for v in card.versions} == {"1", "2"}
++    assert {v.label for v in card.versions} == {"cand", "base"}
++    page = render_page(state)
++    assert '"cand"' not in page and '"base"' not in page  # a página não sabe qual é qual
++    cand_key = next(v.key for v in card.versions if v.label == "cand")
++    save_pref(state, {"card": card.id, "melhor": cand_key})
++    [pref] = read_jsonl(tmp_path / "human" / "en-xx" / "preferencias.jsonl")
++    assert pref["preferido"] == "candidato" and pref["ciclo"] == cid
++
++
++def test_short_verdict_is_keyed_to_this_exact_run(tmp_path: Path) -> None:
++    root, cid, cdir = _setup(tmp_path)
++    state = _state(tmp_path, root, cid)
++    save_short(state, {"video": "a", "short": "nao_publicaria"})
++    _, verdicts = load_human("en-xx", "a", tmp_path / "human")
++    expected = run_revision(load_run(cdir / "cand" / "dub" / "a")[1])
++    assert verdicts[expected]["short"] == "nao_publicaria"
++
++
++def test_clip_covers_segment_with_padding(tmp_path: Path) -> None:
++    root, cid, _ = _setup(tmp_path)
++    state = _state(tmp_path, root, cid)
++    card = next(c for c in state.cards.values() if c.versions[0].segment.id == "seg0001")
++    data, sr = sf.read(io.BytesIO(clip_bytes(state, card.id, "dub")))
++    assert abs(len(data) / sr - (1.0 + 2 * PAD_SECONDS)) < 0.01
++
++
++@pytest.mark.skipif(shutil.which("node") is None, reason="node não instalado")
++def test_page_javascript_parses(tmp_path: Path) -> None:
++    root, cid, _ = _setup(tmp_path)
++    script = re.search(r"<script>(.*)</script>", render_page(_state(tmp_path, root, cid)),
++                       re.S).group(1)
++    js = tmp_path / "page.js"
++    js.write_text(script, encoding="utf-8")
++    assert subprocess.run(["node", "--check", str(js)], capture_output=True).returncode == 0
++
++
++def test_http_server_end_to_end(tmp_path: Path) -> None:
++    root, cid, _ = _setup(tmp_path)
++    state = _state(tmp_path, root, cid)
++    server = serve(state, 0)
++    threading.Thread(target=server.serve_forever, daemon=True).start()
++    base = f"http://127.0.0.1:{server.server_address[1]}"
++    try:
++        assert "Escuta" in urllib.request.urlopen(base + "/").read().decode()
++        card = next(iter(state.cards))
++        body = json.dumps({"card": card, "v": "dub", "rotulo": "ok"}).encode()
++        req = urllib.request.Request(base + "/label", body, {"Content-Type": "application/json"})
++        assert json.loads(urllib.request.urlopen(req).read())["ok"]
++        bad = urllib.request.Request(base + "/label", b'{"card": "c0", "v": "dub"}',
++                                     {"Content-Type": "application/json"})
++        with pytest.raises(urllib.error.HTTPError) as err:
++            urllib.request.urlopen(bad)
++        assert err.value.code == 400
++        audio = urllib.request.urlopen(f"{base}/clip?card={card}&v=src").read()
++        assert audio[:4] == b"RIFF"
++    finally:
++        server.shutdown()
+diff --git a/tests/test_stage_timings.py b/tests/test_stage_timings.py
+new file mode 100644
+index 0000000..40e71ac
+--- /dev/null
++++ b/tests/test_stage_timings.py
+@@ -0,0 +1,22 @@
++import json
++from pathlib import Path
++
++from scripts.dub import STAGE_TIMINGS_FILE, _timed_stage
++
++
++def test_timed_stage_records_last_real_run_per_stage(tmp_path: Path) -> None:
++    with _timed_stage("translate", tmp_path):
++        pass
++    with _timed_stage("synthesize", tmp_path):
++        pass
++    with _timed_stage("translate", tmp_path):
++        pass
++    timings = json.loads((tmp_path / STAGE_TIMINGS_FILE).read_text())
++    assert set(timings) == {"translate", "synthesize"}
++    assert all(v >= 0 for v in timings.values())
++
++
++def test_timed_stage_without_cache_dir_writes_nothing(tmp_path: Path) -> None:
++    with _timed_stage("translate"):
++        pass
++    assert not (tmp_path / STAGE_TIMINGS_FILE).exists()

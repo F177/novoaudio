@@ -223,3 +223,11 @@ Estas coisas vão parecer urgentes. Não são. Não implemente sem eu pedir expl
 - Se uma tarefa parecer exigir violar um invariante, pare e me pergunte em vez de contornar.
 - Se precisar de uma decisão de produto que não está aqui, pergunte — não invente.
 - Não refatore código fora do escopo da tarefa atual.
+
+## Ciclo de qualidade (ferramenta de dev)
+- `/ciclo` orquestra avaliar → calibrar → planejar → implementar → revisar → verificar com `dub-judge`, `dub-analyst`, `dub-implementer` e `dub-reviewer`; `/ciclo marco` usa o exame selado. Eu aprovo o plano, o gasto de GPU, a mudança e o uso do exame.
+- Meus rótulos (`evals/human_labels/`, via `python -m scripts.listen`) valem mais que os do juiz e são a métrica do portão. O juiz tem modelo fixo; trocar o modelo exige recalibrar (`evals/calibration/`).
+- O alvo é o produto, não o conjunto: splits dev/holdout/exame; o analista não vê holdout nem exame; implementador e revisor não veem o conjunto. Tarefas no TASKS.md só com exemplos inventados. Toda mudança passa por `check_generalization` e pelo `eval_cycle compare`.
+- O juiz é proxy de dev: fora do caminho de geração (100% in-house), nunca sobre upload de cliente.
+- Idioma é dado: `evals/languages/`, `evals/golden/en-<idioma>.json`, `TargetLanguage`. Nunca `if idioma == ...` em lógica compartilhada.
+- Não edite `evals/`, `.claude/hooks/` nem limiares para fazer o ciclo passar.

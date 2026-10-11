@@ -195,6 +195,20 @@ Hoje cada segmento era traduzido sozinho pelo Qwen2.5-7B. Erros reais no Short p
 ### T0.31 — Vozes de amostra por locutor 🤝
 Voz do criador clonada não é prioridade. Mas Short com dois locutores não pode soar como uma pessoa só. Banco pequeno de vozes pt-BR de amostra (ex.: 2 masculinas, 2 femininas), geradas com o próprio MOSS e escolhidas de ouvido — com energia, já que referência neutra puxa a entrega pro neutro. Cada locutor da diarização recebe uma voz diferente, escolhida pelo registro da voz original (F0 médio).
 **Aceite:** o Short padrão (2 locutores) sai com 2 vozes distintas e estáveis em todos os segmentos de cada locutor. CER round-trip não piora.
+**Estado (2026-10-11):** implementado (`packages/pipeline/voices.py`, banco de 8 vozes masculinas em `assets/voices/bank/`, desenhadas com MOSS-VoiceGenerator). Medido em 5 Shorts: 2 locutores → 2 vozes; CER médio 0,025 → 0,018. A qualidade das vozes continua ruim em todo vídeo — vai para a T0.36.
+
+### T0.35 — Crítico automático por segmento 🤝 (decisão do usuário, 2026-10-11)
+O produto precisa sair bom sem humano rotulando, em qualquer idioma. Um crítico mede cada fala dublada com modelos abertos, self-hosted, de licença comercial, independentes do juiz:
+- tradução: MetricX-24 em modo QE (sem referência, Apache-2.0) e similaridade de sentido origem × dublado (LaBSE, Apache-2.0);
+- fala inteira: CER do Whisper (já existe);
+- naturalidade da voz: UTMOSv2 (MIT);
+- estabilidade da voz: similaridade de locutor ECAPA (speechbrain, Apache-2.0) entre a fala e a referência da voz.
+Os sinais entram no `report.json` por segmento. Usos: (1) escolher entre candidatos na geração; (2) comparar modelos sem escuta (T0.36); (3) calibrar o juiz do ciclo por consenso automático em vez de rótulo humano por vídeo — rótulo humano fica para uma conferência de ~30 falas por idioma novo.
+**Aceite:** sinais calculados em todo segmento dos Shorts de dev; custo de GPU por Short medido; nenhum limiar novo sem a nota de "não calibrado".
+
+### T0.36 — Modelo de voz decidido por medida 🤝
+As vozes saem ruins em todo vídeo, o que aponta para o TTS e não para o conteúdo. Comparar, nos mesmos Shorts e pelo crítico da T0.35: MOSS, MOSS + LoRA de sotaque, Qwen3-TTS (Apache-2.0, fala português, clona com ~3 s) e outros abertos com licença comercial que falem pt-BR. Conferir controle de duração de cada um (sem ele, a isocronia depende de tradução + aceleração ≤ 1,5x).
+**Aceite:** tabela por modelo (naturalidade, CER, estabilidade de voz, duração, segundos de GPU por Short); troca de modelo só com decisão do usuário.
 
 ### T0.32 — Vazão em lote 🤖
 Um Short de 53 s gasta ~5–6 min de GPU, e cada etapa recarrega o modelo para cada Short. `dub.py` passa a aceitar uma pasta de Shorts e roda cada etapa para N Shorts por carregamento de modelo. Avaliação final e comparação de emoção ficam opcionais ou por amostragem.

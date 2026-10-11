@@ -26,43 +26,48 @@
   },
   "shorts": [
     {
-      "video": "streamer-divida",
-      "fonte": "videos/streamer-divida.mp4",
+      "video": "YTDown.com_Shorts_Media_mS13Z_za4t0_Streamer-Is-Ignoring-20-000-Worth-of-DEBT_002_720p",
+      "fonte": "videos/original/YTDown.com_Shorts_Media_mS13Z_za4t0_Streamer-Is-Ignoring-20-000-Worth-of-DEBT_002_720p.mp4",
       "categoria": "streamer",
       "tags": [
         "dialogo-rapido",
         "2-locutores",
         "palavrao"
       ],
-      "split": "dev"
+      "split": "dev",
+      "apelido": "streamer-divida"
     },
     {
-      "video": "mcconaughey-ironia",
-      "fonte": null,
-      "categoria": null,
+      "video": "YTDown.com_Shorts_Media_KchSfOdwCJE_The-Ironic-Tragedy-Of-Life-Matthew-Mcconaughey_001_720p",
+      "fonte": "videos/original/YTDown.com_Shorts_Media_KchSfOdwCJE_The-Ironic-Tragedy-Of-Life-Matthew-Mcconaughey_001_720p.mp4",
+      "categoria": "podcast",
       "tags": [],
-      "split": "dev"
+      "split": "dev",
+      "apelido": "mcconaughey-ironia"
     },
     {
-      "video": "jay-shetty-fortes-fracos",
-      "fonte": null,
-      "categoria": null,
+      "video": "YTDown.com_Shorts_Media_qSZWnmCwlyo_The-Difference-Is-Rarely-Talent-It-s-What-You-Choose-To-Focus-On-Jay-Shetty-Char_002_720p",
+      "fonte": "videos/original/YTDown.com_Shorts_Media_qSZWnmCwlyo_The-Difference-Is-Rarely-Talent-It-s-What-You-Choose-To-Focus-On-Jay-Shetty-Char_002_720p.mp4",
+      "categoria": "podcast",
       "tags": [],
-      "split": "dev"
+      "split": "dev",
+      "apelido": "jay-shetty-fortes-fracos"
     },
     {
-      "video": "poder-da-calma",
-      "fonte": null,
-      "categoria": null,
+      "video": "YTDown.com_Shorts_Media_zSVDFl2hV8E_The-Power-of-Being-Calm_002_720p",
+      "fonte": "videos/original/YTDown.com_Shorts_Media_zSVDFl2hV8E_The-Power-of-Being-Calm_002_720p.mp4",
+      "categoria": "podcast",
       "tags": [],
-      "split": "dev"
+      "split": "dev",
+      "apelido": "poder-da-calma"
     },
     {
-      "video": "christian-bale-citacao",
-      "fonte": null,
-      "categoria": null,
+      "video": "YTDown.com_Shorts_Media_Q0BOH_s9gSU_Such-a-great-quote-shorts_002_720p",
+      "fonte": "videos/original/YTDown.com_Shorts_Media_Q0BOH_s9gSU_Such-a-great-quote-shorts_002_720p.mp4",
+      "categoria": "podcast",
       "tags": [],
-      "split": "dev"
+      "split": "dev",
+      "apelido": "christian-bale-citacao"
     }
   ]
 }

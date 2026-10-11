@@ -35,6 +35,7 @@ import argparse
 import json
 import math
 import re
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -345,6 +346,7 @@ def render(
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")  # console cp1252 do Windows quebra nos símbolos
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("cache_dir", type=Path, help=".cache/dub/<video>")
     parser.add_argument("--lang", default="pt-BR", help="perfil em evals/languages/")

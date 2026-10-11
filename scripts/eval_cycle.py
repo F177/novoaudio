@@ -507,6 +507,7 @@ def exam_result(cycle_id: str, label: str, root: Path = CYCLES,
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")  # console cp1252 do Windows quebra nos símbolos
     parser = argparse.ArgumentParser(description="Mecânica do ciclo de qualidade")
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("new")

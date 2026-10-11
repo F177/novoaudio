@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -198,6 +199,7 @@ def render_pair(
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")  # console cp1252 do Windows quebra nos símbolos
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("runs", type=Path, nargs="+", help="uma execução, ou duas para A/B")
     args = parser.parse_args()

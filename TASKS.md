@@ -256,6 +256,18 @@ Ele não serve como substituto direto — pelas fontes disponíveis, só fala in
 
 **Aceite:** `k` medido e documentado. Nenhum loop chega ao áudio entregue. CER round-trip não piora além do piso da T0.19 mais uma margem documentada. A taxa de correção por emoção e entonação cai nos vídeos da T0.28 (re-rotulando só os segmentos afetados). Caminho quente continua < 5 s, medido como na T0.27 — segmento instruído gera mais tokens, então meça os dois casos.
 
+### T0.34 — Mixagem 🤝 (último estágio da Fase 0, pedido do usuário em 2026-10-10)
+A mixagem é muito importante para o Short soar publicável. Hoje ela só soma voz e fundo e normaliza o áudio inteiro (T0.10). Já feito: nível de voz por fala igualado ao da fala original (`assembly.match_speech_levels`, 2026-10-10), porque o MOSS gera cada fala num volume diferente.
+
+Falta:
+1. **Ducking:** abaixar o fundo enquanto a voz dublada fala (sidechain com ataque e soltura suaves) e devolver nas pausas. O fundo alto às vezes cobre a voz (achado de 2026-09-14, ainda aberto).
+2. **Vazamento da voz original:** o stem de fundo do Demucs às vezes traz resto da fala em inglês por baixo da dublagem. Medir (ASR no fundo, nas janelas com dublagem) e atenuar só nessas janelas.
+3. **Bordas das falas:** fade curto no início e no fim de cada fala, sem clique nem corte seco.
+4. **Ambiência:** a voz do TTS sai seca e o original tem sala. Medir se uma reverberação leve, igual à do original, soa mais natural.
+5. **Entrega para o YouTube:** −14 LUFS integrado e pico real ≤ −1 dBTP.
+
+**Aceite:** nos Shorts da T0.28, a voz fica X dB acima do fundo durante a fala (X a definir por escuta) e nenhum segmento sai com fala em inglês audível no fundo. Sem clique nas bordas. Loudness e pico dentro do alvo. Comparação de ouvido antes e depois, feita pelo usuário.
+
 ---
 
 ## Fase 1 — MVP web

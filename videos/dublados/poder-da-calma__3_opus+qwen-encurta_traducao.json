@@ -1,0 +1,58 @@
+[
+  {
+    "id": "seg0000",
+    "t_inicio": 0.231,
+    "t_fim": 3.192,
+    "texto_original": "How do you become the most powerful person in the room?",
+    "traducao_usada": "Como se torna a pessoa mais poderosa?"
+  },
+  {
+    "id": "seg0001",
+    "t_inicio": 3.872,
+    "t_fim": 7.273,
+    "texto_original": "A powerful person is relaxed, right?",
+    "traducao_usada": "Pessoa poderosa tá relaxada, né?"
+  },
+  {
+    "id": "seg0002",
+    "t_inicio": 8.094,
+    "t_fim": 16.176,
+    "texto_original": "So when you enter that room, you are relaxed. You're not nervous, you're not looking for attention, you're not wondering what people think about you.",
+    "traducao_usada": "Então, quando cê entra na sala, cê tá relaxado. Não tá nervoso, nem procurando atenção, nem se perguntando o que as pessoas pensam de cê."
+  },
+  {
+    "id": "seg0003",
+    "t_inicio": 16.657,
+    "t_fim": 20.538,
+    "texto_original": "You're inside your body, you're calm and you're confident and you're relaxed.",
+    "traducao_usada": "Você está dentro do seu corpo, está calmo, confiante e relaxado."
+  },
+  {
+    "id": "seg0004",
+    "t_inicio": 21.258,
+    "t_fim": 24.704,
+    "texto_original": "that relaxed quality is incredibly powerful,",
+    "traducao_usada": "Que qualidade relaxada é incrivelmente poderosa,"
+  },
+  {
+    "id": "seg0005",
+    "t_inicio": 25.065,
+    "t_fim": 30.494,
+    "texto_original": "incredibly attractive. Because if you enter a room and you're a stranger or people don't know you,",
+    "traducao_usada": "incrivelmente atraente. Se cê entra num quarto e cê é estranho ou as pessoas não te conhecem,"
+  },
+  {
+    "id": "seg0006",
+    "t_inicio": 31.135,
+    "t_fim": 39.729,
+    "texto_original": "everyone's nervous. Everyone, naturally, is nervous, but you're not. You're calm, you're not looking everywhere, you're not touching yourself, you're not talking a lot, you're relaxed.",
+    "traducao_usada": "todos tão nervosos. Todos, é claro, tão nervosos, mas cê não. Cê tá calmo, não tá procurando em todo lugar, não tá se tocando, não tá falando muito, tá relaxado."
+  },
+  {
+    "id": "seg0007",
+    "t_inicio": 40.37,
+    "t_fim": 43.536,
+    "texto_original": "You're going to draw a lot of attention, a lot of power. Okay,",
+    "traducao_usada": "Você vai chamar muita atenção, muito poder. Tudo bem."
+  }
+]

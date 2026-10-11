@@ -1,0 +1,93 @@
+[
+  {
+    "id": "seg0000",
+    "t_inicio": 0.191,
+    "t_fim": 1.593,
+    "texto_original": "How much debt do you have?",
+    "traducao_usada": "Quanta dívida tem?"
+  },
+  {
+    "id": "seg0001",
+    "t_inicio": 2.434,
+    "t_fim": 3.975,
+    "texto_original": "Um, maybe $20,000?",
+    "traducao_usada": "Talvez $20.000?"
+  },
+  {
+    "id": "seg0002",
+    "t_inicio": 4.055,
+    "t_fim": 14.327,
+    "texto_original": "Just about. Listen, this takes like 20 years to pay off. Now, if you make your minimum monthly payment with us. I don't even know how to make the payment. Does your dad pay for you? Just the minimum? I don't know. I need to talk to this guy. Call your dad.",
+    "traducao_usada": "Quase. Isso leva uns 20 anos pra pagar. Agora, se fizer seu pagamento mínimo mensal conosco. Nem sei como fazer o pagamento. Seu pai te paga? Só o mínimo? Não sei. Preciso falar com ele. Chame seu pai."
+  },
+  {
+    "id": "seg0003",
+    "t_inicio": 15.508,
+    "t_fim": 15.748,
+    "texto_original": "Here you",
+    "traducao_usada": "Aqui"
+  },
+  {
+    "id": "seg0004",
+    "t_inicio": 16.129,
+    "t_fim": 21.622,
+    "texto_original": "go. I gotta talk to this. Hello! Hello? Papa,",
+    "traducao_usada": "tá. Tenho que falar com isso. Alô! Alô? Pai,"
+  },
+  {
+    "id": "seg0005",
+    "t_inicio": 22.002,
+    "t_fim": 29.707,
+    "texto_original": "I'm with your daughter. Why are we giving her thousands of dollars of credit card usage instead of her growing up and getting a",
+    "traducao_usada": "tô com sua filha. Por que tamos lhe dando milhares de dólares de uso de cartão de crédito em vez de ela crescer e conseguir um"
+  },
+  {
+    "id": "seg0006",
+    "t_inicio": 30.607,
+    "t_fim": 35.911,
+    "texto_original": "job? Her bullshit spending alone last month was in the thousands of dollars. She's paying",
+    "traducao_usada": "emprego? Seu gasto de merda sozinho no mês passado foi de milhares de dólares. Ela tá pagando"
+  },
+  {
+    "id": "seg0007",
+    "t_inicio": 35.951,
+    "t_fim": 37.152,
+    "texto_original": "for that. What are you talking about?",
+    "traducao_usada": "por isso. Do que tá falando?"
+  },
+  {
+    "id": "seg0008",
+    "t_inicio": 37.472,
+    "t_fim": 41.355,
+    "texto_original": "Is she going to pay for that? I don't know how. She said she doesn't know",
+    "traducao_usada": "Ela vai pagar por isso? Não sei como. Disse que não sabe"
+  },
+  {
+    "id": "seg0009",
+    "t_inicio": 41.575,
+    "t_fim": 45.077,
+    "texto_original": "how. What do you mean doesn't? You just said she spent thousands of dollars.",
+    "traducao_usada": "como. O que quer dizer? Cê disse que gastou milhares de dólares."
+  },
+  {
+    "id": "seg0010",
+    "t_inicio": 45.417,
+    "t_fim": 47.679,
+    "texto_original": "Yeah, she said she doesn't know how she's going to pay for it.",
+    "traducao_usada": "Ela disse que não sabe como vai pagar."
+  },
+  {
+    "id": "seg0011",
+    "t_inicio": 47.839,
+    "t_fim": 49.24,
+    "texto_original": "What do you mean? What do you mean?",
+    "traducao_usada": "O que quer dizer? O que quer dizer?"
+  },
+  {
+    "id": "seg0012",
+    "t_inicio": 50.268,
+    "t_fim": 52.506,
+    "texto_original": "I just I don't know how to even make a payment on it.",
+    "traducao_usada": "Só não sei como pagar por isso."
+  }
+]

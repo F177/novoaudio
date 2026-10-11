@@ -1,0 +1,16 @@
+[
+  {
+    "id": "seg0000",
+    "t_inicio": 0.031,
+    "t_fim": 5.408,
+    "texto_original": "There's that quote about. The ironic tragedy is that life has to be lived forward but only makes sense in reverse.",
+    "traducao_usada": "Tem aquela frase. A trágica ironia é viver pra frente, mas só faz sentido ao contrário."
+  },
+  {
+    "id": "seg0001",
+    "t_inicio": 6.271,
+    "t_fim": 10.705,
+    "texto_original": "Yeah. Ironic tragedy. Who said that?",
+    "traducao_usada": "Sim. Trágica ironia. E quem disse isso?"
+  }
+]

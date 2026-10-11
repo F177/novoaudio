@@ -1,0 +1,72 @@
+[
+  {
+    "id": "seg0000",
+    "t_inicio": 0.251,
+    "t_fim": 5.514,
+    "texto_original": "Say that again, Jay. Weak people notice other people's mistakes",
+    "traducao_usada": "Diga de novo, Jay. Fracos notam erros dos outros."
+  },
+  {
+    "id": "seg0001",
+    "t_inicio": 6.194,
+    "t_fim": 10.597,
+    "texto_original": "and laugh. Strong people notice other people's mistakes",
+    "traducao_usada": "pessoas fortes notam os erros dos outros e aprendem."
+  },
+  {
+    "id": "seg0002",
+    "t_inicio": 11.217,
+    "t_fim": 16.34,
+    "texto_original": "and learn. Weak people talk about other people's problems",
+    "traducao_usada": "Pessoas fracas falam sobre os problemas dos outros"
+  },
+  {
+    "id": "seg0003",
+    "t_inicio": 17.061,
+    "t_fim": 20.983,
+    "texto_original": "to feel better. Strong people talk about other people's problems",
+    "traducao_usada": "para se sentir melhor. Pessoas fortes falam sobre problemas dos outros."
+  },
+  {
+    "id": "seg0004",
+    "t_inicio": 21.563,
+    "t_fim": 25.706,
+    "texto_original": "to become better. Weak people gossip about others",
+    "traducao_usada": "para melhorar. Pessoas fracas falam dos outros."
+  },
+  {
+    "id": "seg0005",
+    "t_inicio": 26.506,
+    "t_fim": 33.404,
+    "texto_original": "to build fake connections Strong people express vulnerability to build real ones.",
+    "traducao_usada": "falsas conexões. Pessoas fortes mostram vulnerabilidade para reais."
+  },
+  {
+    "id": "seg0006",
+    "t_inicio": 34.204,
+    "t_fim": 37.847,
+    "texto_original": "And this one's the kicker that you were just talking about. Weak people",
+    "traducao_usada": "E isso é o que você estava falando há pouco. Pessoas fracas invejam as pessoas à frente delas."
+  },
+  {
+    "id": "seg0007",
+    "t_inicio": 38.628,
+    "t_fim": 43.411,
+    "texto_original": "envy people ahead of them. Strong people study people ahead of them.",
+    "traducao_usada": "pessoas fortes estudam as pessoas à frente delas."
+  },
+  {
+    "id": "seg0008",
+    "t_inicio": 44.452,
+    "t_fim": 48.475,
+    "texto_original": "And the interesting thing is, both people are looking at the same thing,",
+    "traducao_usada": "E legal ambas estarem olhando para a mesma coisa."
+  },
+  {
+    "id": "seg0009",
+    "t_inicio": 49.196,
+    "t_fim": 55.681,
+    "texto_original": "but they're seeing different things because no one is a weak or strong person. It's just what you focus on.",
+    "traducao_usada": "mas estão vendo coisas diferentes porque ninguém é uma pessoa fraca ou forte. É só o que você foca."
+  }
+]

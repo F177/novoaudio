@@ -1,0 +1,16 @@
+[
+  {
+    "id": "seg0000",
+    "t_inicio": 0.131,
+    "t_fim": 3.621,
+    "texto_original": "I don't actually know if Christian Bale did say this, but the quote is,",
+    "traducao_usada": "Não sei se Christian Bale disse, mas a citação é,"
+  },
+  {
+    "id": "seg0001",
+    "t_inicio": 4.062,
+    "t_fim": 10.38,
+    "texto_original": "if you have a problem with me, text me. And if you don't have my number, you don't know me well enough to have a problem with me. That is so good.",
+    "traducao_usada": "se você tem problema comigo, me manda mensagem. E se você não tem o meu número, você não conhece eu bem o suficiente para ter problema comigo. Isso é tão bom."
+  }
+]

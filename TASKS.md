@@ -180,16 +180,17 @@ Experimento em duas curvas, com ~10 amostras por ponto, medindo CER e duração:
 
 As tarefas T0.30 a T0.33 entram **antes** da T0.27 e da T0.28, nesta ordem. Motivo: o Short padrão (`videos/`, streamer, 53 s) mostrou que a tradução é o elo mais fraco (cerca de 6 de 13 falas claramente erradas), que ~2,8 s de fala são cortados em diálogo rápido e que um Short custa ~5–6 min de GPU.
 
-### T0.30 — Tradução por janela de diálogo 🤝
-Hoje cada segmento é traduzido sozinho. Erros reais no Short padrão: "How much debt do you have?" → "Tá valendo quantos débitos tu tá com aí?"; "Here you" → "Aqui vcs"; "What are you talking about?" → "Vamos ver."; "job?" ficou em inglês; "q" e "vcs" ainda aparecem.
-1. **Janela de diálogo:** traduzir 10–20 segmentos de uma vez, com rótulo de locutor, devolvendo JSON com uma tradução por id de segmento. Validar 1:1 (um texto por segmento) com retry; levar as últimas traduções para a janela seguinte (consistência de termo e registro).
-2. **Fiel primeiro, encurtar depois** (método DT, ESTsoft, EMNLP 2025): uma passada fiel, sem pressão de orçamento. Só os segmentos acima do orçamento passam por encurtamento: 3 candidatos por rodada, mantém os que chegam mais perto do alvo, escolhe por COMET (`Unbabel/wmt22-comet-da`, Apache-2.0) usando a tradução fiel como referência, repete até caber. Substitui "5 candidatos por segmento ranqueados quase só por sílaba" e dá a `traducao_infiel` um sinal real.
-3. **Prompt de encurtar com ~5 exemplos fortemente comprimidos em pt-BR** (achado publicado: exemplos do mesmo tamanho fazem o modelo ignorar o limite).
-4. **Tom protegido:** rótulo de tom por segmento (emotion2vec da fonte + pistas do texto: palavrão, intensificador, pontuação). Encurtar corta enchimento e informação repetida primeiro; nunca interjeições, intensificadores, nível de palavrão ou `!`/`?`.
-5. **Modelo:** continua na classe 7–8B (rápido e barato; 30B descartado). Hunyuan-MT-7B só em A/B se a licença for aceitável (não vale na UE, Reino Unido e Coreia do Sul). Seed-X e Tower+ descartados (licença não comercial).
+### T0.30 — Tradução 🤝 (feito, 2026-10-10)
+Hoje cada segmento era traduzido sozinho pelo Qwen2.5-7B. Erros reais no Short padrão: "How much debt do you have?" → "Tá valendo quantos débitos tu tá com aí?"; "Here you" → "Aqui vcs"; "What are you talking about?" → "Vamos ver."; "job?" ficou em inglês.
 
-**Palavrão (decisão do usuário, 2026-10-10):** manter como no original. Não suavizar nem mudar o conteúdo — o mesmo nível de palavrão e de gíria do original vai pra tradução.
-**Aceite:** erros de tradução contados à mão, antes e depois, no Short padrão + ~30 segmentos de outros Shorts + os casos já conhecidos (NFL seg0022, T0.23) — caem. Nenhum candidato com alfabeto estrangeiro. Tempo de tradução por Short não aumenta. Aderência ao orçamento não piora.
+**O que foi tentado e medido (5 Shorts, comparação lado a lado e escuta do usuário):**
+- Qwen por janela de diálogo de 12 falas, JSON validado 1:1, encurtamento por LLM com juiz de fidelidade. Melhorou sobre o segmento isolado, mas continuou errando palavra e sentido ("Quanto débito", "não conhece eu", "muita poder"), cortando conteúdo ("e riem" sumiu) e variando a cada rodada. O encurtamento deixava fala telegráfica ("Pai paga?"). Regra de registro falado mais forte fez o 7B trocar "você" por "tu" — revertida.
+- **Escolhido: OPUS-MT** (`Helsinki-NLP/opus-mt-tc-big-en-pt`, 240M, tag `>>pob<<` = pt-BR; com `>>por<<` sai pt-PT). Traduz a frase inteira (falas cortadas são juntadas), devolve 8 alternativas e a mais curta que cabe no orçamento (com perda de nota limitada) vence; contração (está→tá) é alternativa extra. A tradução volta para os segmentos pelo alinhamento de atenção do próprio modelo. Filtros do perfil pt-BR: formas pt-PT descartadas, ênclise vira próclise, palavrão nunca diminui. ~6 s por Short na GPU, determinístico.
+- Encurtar com Qwen depois do OPUS piorou as falas — descartado. Todo o caminho de tradução por LLM foi removido.
+
+**Achados no caminho, corrigidos:** cache da avaliação ignorava o áudio novo (escolhia o candidato pela transcrição de outro áudio — causa de palavra engolida); WhisperX às vezes devolve trecho sem pontuação, e o tradutor invertia o sentido — resolvido com modelo de restauração de pontuação (pedir pontuação ao Whisper com `initial_prompt` fez ele pular uma frase inteira, descartado); volume diferente por fala do MOSS — nível de voz igualado ao da fala original.
+
+**Ainda erra (aceito, vai para a revisão rápida):** expressão idiomática ("the kicker"), alguma escolha literal ("room" → "quarto", "ahead" → "antes"), gênero ocasional ("Tá relaxada").
 
 ### T0.31 — Vozes de amostra por locutor 🤝
 Voz do criador clonada não é prioridade. Mas Short com dois locutores não pode soar como uma pessoa só. Banco pequeno de vozes pt-BR de amostra (ex.: 2 masculinas, 2 femininas), geradas com o próprio MOSS e escolhidas de ouvido — com energia, já que referência neutra puxa a entrega pro neutro. Cada locutor da diarização recebe uma voz diferente, escolhida pelo registro da voz original (F0 médio).

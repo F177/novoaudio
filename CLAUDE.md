@@ -58,7 +58,8 @@ Fundador solo. Prioridade absoluta: **simplicidade operacional e custo baixo em 
 | Separação voz/fundo | Demucs (htdemucs) | RunPod |
 | ASR + timestamps por palavra | WhisperX (large-v3) | RunPod |
 | Diarização | pyannote (via WhisperX) | RunPod |
-| Tradução | Qwen2.5-7B-Instruct (self-hosted) | RunPod |
+| Restauração de pontuação | fullstop-punctuation-multilang-large (MIT) — só onde o ASR veio sem pontuação | RunPod |
+| Tradução | OPUS-MT `Helsinki-NLP/opus-mt-tc-big-en-pt`, tag `>>pob<<` (pt-BR), n-best + escolha por orçamento (T0.30) | RunPod |
 | TTS | MOSS-TTS-v1.5 (OpenMOSS-Team, 8B, Apache-2.0) | RunPod |
 | Avaliação (CER) | Whisper large-v3 | RunPod |
 | Comparação de emoção | emotion2vec_plus_large (FunASR) — opt-in, não calibrado | RunPod |
@@ -106,7 +107,7 @@ Hoje tudo isso roda num Pod de desenvolvimento via SSH, não em Serverless. Ver 
   /pipeline         Lógica de dublagem pura (sem I/O de rede)
     segmentation.py   Segmentação prosódica
     budget.py         Orçamento de duração, contagem de sílabas pt-BR
-    translation.py    Tradução com restrição de comprimento
+    translation.py    Tradução OPUS-MT: perfil de idioma, n-best por orçamento, divisão entre segmentos
     synthesis.py      Wrapper do TTS, mapeamento duração→tokens
     assembly.py       Montagem da timeline, mix, remux
     quality.py        Gates de qualidade e flags

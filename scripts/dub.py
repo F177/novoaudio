@@ -770,7 +770,8 @@ def run_pipeline(
     # do conteúdo pra calcular o hash de entrada antes de decidir se a etapa
     # está obsoleta.
     synth_jobs = [build_synth_job(seg_id) for seg_id in segments_by_id]
-    synth_hash = _hash_json(synth_jobs)
+    # O adapter LoRA muda a voz sem mudar o job: entra na chave.
+    synth_hash = _hash_json([synth_jobs, pod.lora_adapter_path])
     synth_dir = cached("synth")
     synth_meta_path = synth_dir / "synth_meta.json"
     if needs_stage(synth_meta_path, "synthesize", synth_hash):

@@ -101,6 +101,7 @@ from packages.pipeline.scorecard import build_scorecard
 from packages.pipeline.segmentation import Segment, Word, segment_words
 from packages.pipeline.subtitles import build_srt
 from packages.pipeline.synthesis import MIN_SYNTHESIS_SECONDS, is_within_tolerance
+from packages.pipeline.voices import Voice, assign_voices, load_bank, median_f0_hz
 from scripts import r2
 from scripts.pod_runner import PodConfig, download_from_pod, run_on_pod, upload_to_pod
 
@@ -525,6 +526,30 @@ def _timed_stage(name: str):
     print(f"[timing] {name}: {elapsed:.1f}s", flush=True)
 
 
+VOICE_BANK_MANIFEST = Path("assets/voices/bank/voices.json")
+
+
+def _voices_by_speaker(
+    segments: list[Segment], vocals_path: Path, video_id: str
+) -> dict[str, Voice]:
+    """Locutores em ordem de tempo de fala; F0 de cada um medido na voz
+    original (stem do Demucs) dos segmentos dele."""
+    bank = load_bank(VOICE_BANK_MANIFEST)
+    if not bank or not vocals_path.exists():
+        return {}
+    audio, sr = sf.read(vocals_path, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    talk: dict[str, float] = {}
+    clips: dict[str, list[np.ndarray]] = {}
+    for s in segments:
+        speaker = s.speaker or ""
+        talk[speaker] = talk.get(speaker, 0.0) + s.t_fim - s.t_inicio
+        clips.setdefault(speaker, []).append(audio[int(s.t_inicio * sr) : int(s.t_fim * sr)])
+    f0 = {k: median_f0_hz(np.concatenate(v), sr) for k, v in clips.items()}
+    return assign_voices(sorted(talk, key=talk.get, reverse=True), f0, bank, seed=video_id)
+
+
 def run_pipeline(
     video_path: Path,
     out_path: Path,
@@ -706,8 +731,15 @@ def run_pipeline(
         candidates = translations.get(seg_id, [])
         best_text_by_id[seg_id] = candidates[0]["text"] if candidates else s.texto
 
+    # T0.31: cada locutor com uma voz diferente do banco, do mesmo gênero
+    # aparente da voz original. Banco vazio cai na referência fixa.
+    voice_by_speaker = _voices_by_speaker(segments, vocals_path, video_path.stem)
+    if voice_by_speaker:
+        print(f"[vozes] {({k: v.id for k, v in voice_by_speaker.items()})}")
+
     def build_synth_job(seg_id: str) -> dict[str, Any]:
         s = segments_by_id[seg_id]
+        voice = voice_by_speaker.get(s.speaker or "")
         return {
             "id": seg_id,
             "translated_text": best_text_by_id[seg_id],
@@ -721,7 +753,7 @@ def run_pipeline(
             # Sem isso, o MOSS-TTS não ancora nenhuma voz e sorteia um timbre
             # novo por chamada (achado real ouvindo o T0.12: voz mudava a
             # cada segmento). Ver docstring de PodConfig.
-            "reference_audio_path": pod.voice_reference,
+            "reference_audio_path": voice.path if voice else pod.voice_reference,
         }
 
     # --- 6. síntese com duração e pausa (remoto, MOSS-TTS) ---

@@ -38,3 +38,4 @@ reports/
 # amarra count_energy_bursts ao achado real do seg0009 documentado em
 # docs/moss_tts_investigation.md, não dado sintético inventado.
 !packages/pipeline/tests/fixtures/seg0009_base.wav
+!assets/voices/bank/*.wav

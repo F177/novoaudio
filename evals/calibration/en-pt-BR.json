@@ -1,0 +1,41 @@
+{
+  "par": "en-pt-BR",
+  "juiz_modelo": "claude-opus-5-5",
+  "atualizado_em": "2026-10-11T17:18:13",
+  "ciclo": "20261011-1659-linha-de-base",
+  "regra": {
+    "min_n": 5,
+    "min_precisao": 0.7,
+    "min_recall": 0.6,
+    "ruido_padrao": 0.15
+  },
+  "concordancia": {
+    "n": 1,
+    "vp": 0,
+    "fp": 1,
+    "fn": 0,
+    "vn": 0,
+    "concordancia": 0.0,
+    "kappa": 0.0,
+    "discordancia": 1.0
+  },
+  "classes": {
+    "sentido.literal": {
+      "juiz": 1,
+      "humano": 0,
+      "precisao": 0.0,
+      "recall": null,
+      "mesma_classe": null,
+      "confiavel": false
+    }
+  },
+  "ruido": {
+    "discordancia": 0.229,
+    "n": 35,
+    "ciclo": "20261011-1659-linha-de-base",
+    "rotulos": [
+      "base",
+      "base-r2"
+    ]
+  }
+}
